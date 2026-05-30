@@ -3,18 +3,18 @@ const STATIC_CACHE = 'static-v1';
 const DYNAMIC_CACHE = 'dynamic-v1';
 
 const STATIC_ASSETS = [
-    '/',
-    '/index.html',
-    '/privasi.html',
-    '/manifest.json',
-    '/icons/icon-72.png',
-    '/icons/icon-96.png',
-    '/icons/icon-128.png',
-    '/icons/icon-144.png',
-    '/icons/icon-152.png',
-    '/icons/icon-192.png',
-    '/icons/icon-384.png',
-    '/icons/icon-512.png'
+    './',
+    './index.html',
+    './privasi.html',
+    './manifest.json',
+    './icons/icon-72.png',
+    './icons/icon-96.png',
+    './icons/icon-128.png',
+    './icons/icon-144.png',
+    './icons/icon-152.png',
+    './icons/icon-192.png',
+    './icons/icon-384.png',
+    './icons/icon-512.png'
 ];
 
 // Install Event
@@ -80,13 +80,13 @@ self.addEventListener('push', (event) => {
     const data = event.data ? event.data.json() : {
         title: 'Padang Limau Negeri Indah',
         body: 'Ada promo wisata terbaru! Cek sekarang 🌴',
-        icon: '/icons/icon-192.png'
+        icon: './icons/icon-192.png'
     };
 
     const options = {
         body: data.body,
-        icon: data.icon || '/icons/icon-192.png',
-        badge: '/icons/icon-72.png',
+        icon: data.icon || './icons/icon-192.png',
+        badge: './icons/icon-72.png',
         image: data.image,
         data: { url: data.url || '/' },
         actions: [
