@@ -1,21 +1,28 @@
-const CACHE_NAME = 'merysa-v1';
-const assets = [
-  './',
-  './index.html',
-];
+const CACHE_NAME = "pdlimau-v1";
 
-self.addEventListener('install', (evt) => {
-  evt.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      cache.addAll(assets);
-    })
-  );
+self.addEventListener("install", event => {
+    self.skipWaiting();
+
+    event.waitUntil(
+        caches.open(CACHE_NAME).then(cache => {
+            return cache.addAll([
+                "/",
+                "/manifest.json"
+            ]);
+        })
+    );
 });
 
-self.addEventListener('fetch', (evt) => {
-  evt.respondWith(
-    caches.match(evt.request).then((res) => {
-      return res || fetch(evt.request);
-    })
-  );
+self.addEventListener("activate", event => {
+    event.waitUntil(
+        self.clients.claim()
+    );
+});
+
+self.addEventListener("fetch", event => {
+    event.respondWith(
+        fetch(event.request).catch(() => {
+            return caches.match(event.request);
+        })
+    );
 });
