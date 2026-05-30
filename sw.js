@@ -1,122 +1,102 @@
+/**
+ * Service Worker - Padang Limau Negeri Indah
+ * Mode: Display Only (No Data Collection)
+ * Scope: /PD_LIMAU/
+ */
+
 const CACHE_NAME = 'padang-limau-v1';
 const STATIC_CACHE = 'static-v1';
-const DYNAMIC_CACHE = 'dynamic-v1';
 
+// Assets yang akan di-cache untuk offline access
 const STATIC_ASSETS = [
-    './',
-    './index.html',
-    './privasi.html',
-    './manifest.json',
-    './icons/icon-72.png',
-    './icons/icon-96.png',
-    './icons/icon-128.png',
-    './icons/icon-144.png',
-    './icons/icon-152.png',
-    './icons/icon-192.png',
-    './icons/icon-384.png',
-    './icons/icon-512.png'
+  '/PD_LIMAU/',
+  '/PD_LIMAU/index.html',
+  '/PD_LIMAU/privasi.html',
+  '/PD_LIMAU/manifest.json',
+  '/PD_LIMAU/sw.js',
+  '/PD_LIMAU/icons/icon-72.png',
+  '/PD_LIMAU/icons/icon-96.png',
+  '/PD_LIMAU/icons/icon-128.png',
+  '/PD_LIMAU/icons/icon-144.png',
+  '/PD_LIMAU/icons/icon-152.png',
+  '/PD_LIMAU/icons/icon-192.png',
+  '/PD_LIMAU/icons/icon-384.png',
+  '/PD_LIMAU/icons/icon-512.png',
+  '/PD_LIMAU/offline.html'
 ];
 
-// Install Event
+// Install: Cache static assets
 self.addEventListener('install', (event) => {
-    console.log('[SW] Service Worker installed');
-    event.waitUntil(
-        caches.open(STATIC_CACHE)
-            .then(cache => {
-                console.log('[SW] Caching static assets');
-                return cache.addAll(STATIC_ASSETS);
-            })
-            .then(() => self.skipWaiting())
-    );
+  console.log('[SW] Installing...');
+  event.waitUntil(
+    caches.open(STATIC_CACHE)
+      .then((cache) => {
+        console.log('[SW] Caching static assets');
+        return cache.addAll(STATIC_ASSETS);
+      })
+      .then(() => self.skipWaiting())
+      .catch((err) => console.error('[SW] Install error:', err))
+  );
 });
 
-// Activate Event
+// Activate: Clean old caches
 self.addEventListener('activate', (event) => {
-    console.log('[SW] Service Worker activated');
-    event.waitUntil(
-        caches.keys().then(cacheNames => {
-            return Promise.all(
-                cacheNames
-                    .filter(name => name !== STATIC_CACHE && name !== DYNAMIC_CACHE)
-                    .map(name => caches.delete(name))
-            );
-        }).then(() => self.clients.claim())
-    );
+  console.log('[SW] Activating...');
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames
+          .filter((name) => name !== STATIC_CACHE)
+          .map((name) => caches.delete(name))
+      );
+    }).then(() => self.clients.claim())
+  );
 });
 
-// Fetch Event - Network First, Fallback to Cache
+// Fetch: Cache First strategy untuk display-only
 self.addEventListener('fetch', (event) => {
-    if (event.request.method !== 'GET') return;
+  const { request } = event;
+  
+  // Hanya handle GET requests
+  if (request.method !== 'GET') return;
 
-    if (STATIC_ASSETS.includes(event.request.url)) {
-        event.respondWith(
-            caches.match(event.request).then(cached => {
-                return cached || fetch(event.request);
-            })
-        );
-        return;
-    }
+  // Skip external resources (CDN fonts, images, etc.)
+  const url = new URL(request.url);
+  if (url.origin !== location.origin) {
+    event.respondWith(fetch(request));
+    return;
+  }
 
-    // Dynamic content - Network first, fallback to cache
-    event.respondWith(
-        fetch(event.request)
-            .then(response => {
-                const responseClone = response.clone();
-                caches.open(DYNAMIC_CACHE).then(cache => {
-                    cache.put(event.request, responseClone);
-                });
-                return response;
-            })
-            .catch(() => {
-                return caches.match(event.request).then(cached => {
-                    return cached || caches.match('/index.html');
-                });
-            })
-    );
+  // Cache-First strategy untuk assets lokal
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      if (cached) {
+        return cached;
+      }
+      
+      return fetch(request).then((response) => {
+        // Clone response untuk cache
+        const responseClone = response.clone();
+        caches.open(STATIC_CACHE).then((cache) => {
+          cache.put(request, responseClone);
+        });
+        return response;
+      }).catch(() => {
+        // Fallback ke offline.html untuk navigasi
+        if (request.mode === 'navigate') {
+          return caches.match('/PD_LIMAU/offline.html');
+        }
+        return new Response('Offline - Konten tidak tersedia', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: { 'Content-Type': 'text/plain' }
+        });
+      });
+    })
+  );
 });
 
-// Push Notification
-self.addEventListener('push', (event) => {
-    const data = event.data ? event.data.json() : {
-        title: 'Padang Limau Negeri Indah',
-        body: 'Ada promo wisata terbaru! Cek sekarang 🌴',
-        icon: './icons/icon-192.png'
-    };
+// Skip push notification handling (no data collection mode)
+// Jika ingin notifikasi, tambahkan event listener terpisah
 
-    const options = {
-        body: data.body,
-        icon: data.icon || './icons/icon-192.png',
-        badge: './icons/icon-72.png',
-        image: data.image,
-        data: { url: data.url || '/' },
-        actions: [
-            { action: 'open', title: 'Buka Aplikasi' },
-            { action: 'close', title: 'Tutup' }
-        ],
-        tag: 'padang-limau-notification',
-        renotify: true
-    };
-
-    event.waitUntil(
-        self.registration.showNotification(data.title, options)
-    );
-});
-
-self.addEventListener('notificationclick', (event) => {
-    event.notification.close();
-
-    if (event.action === 'close') return;
-
-    event.waitUntil(
-        clients.matchAll({ type: 'window' }).then(clientList => {
-            for (const client of clientList) {
-                if (client.url === '/' && 'focus' in client) {
-                    return client.focus();
-                }
-            }
-            if (clients.openWindow) {
-                return clients.openWindow('/');
-            }
-        })
-    );
-});
+console.log('[SW] Service Worker loaded - Display Only Mode');

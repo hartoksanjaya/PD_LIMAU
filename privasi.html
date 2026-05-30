@@ -4,194 +4,184 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a5e1a">
+    <meta name="description" content="Kebijakan Privasi - Padang Limau Negeri Indah. Aplikasi display only tanpa pengumpulan data.">
     <title>Kebijakan Privasi - Padang Limau Negeri Indah</title>
-    <link rel="manifest" href="manifest.json">
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="manifest" href="/PD_LIMAU/manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="/PD_LIMAU/icons/icon-192.png">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" integrity="sha512-..." crossorigin="anonymous" referrerpolicy="no-referrer">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Poppins', sans-serif;
-            color: #212529;
-            background: #f8f9fa;
-            line-height: 1.8;
+            font-family: 'Poppins', sans-serif; color: #212529;
+            background: #f8f9fa; line-height: 1.7;
         }
         .privacy-header {
             background: linear-gradient(135deg, #0d3d0d, #1a5e1a);
-            color: white;
-            padding: 100px 20px 60px;
-            text-align: center;
+            color: white; padding: 80px 20px 50px; text-align: center;
         }
         .privacy-header h1 {
             font-family: 'Playfair Display', serif;
-            font-size: 2.5rem;
-            margin-bottom: 10px;
+            font-size: 2rem; margin-bottom: 8px;
         }
-        .privacy-header p {
-            opacity: 0.8;
-            font-size: 0.95rem;
-        }
+        .privacy-header p { opacity: 0.85; font-size: 0.9rem; }
         .back-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            color: #ffc947;
-            text-decoration: none;
-            margin-bottom: 20px;
-            font-weight: 500;
+            display: inline-flex; align-items: center; gap: 6px;
+            color: #ffc947; text-decoration: none;
+            margin-bottom: 15px; font-weight: 500; font-size: 0.9rem;
         }
         .back-btn:hover { color: #fff; }
         .privacy-content {
-            max-width: 800px;
-            margin: -30px auto 60px;
-            background: white;
-            border-radius: 20px;
-            padding: 50px 40px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            max-width: 750px; margin: -25px auto 50px;
+            background: white; border-radius: 18px;
+            padding: 40px 30px; box-shadow: 0 8px 30px rgba(0,0,0,0.08);
         }
         .privacy-content h2 {
             font-family: 'Playfair Display', serif;
-            color: #0d3d0d;
-            font-size: 1.5rem;
-            margin: 35px 0 15px;
-            padding-bottom: 10px;
+            color: #0d3d0d; font-size: 1.4rem;
+            margin: 30px 0 12px; padding-bottom: 8px;
             border-bottom: 2px solid #e9ecef;
         }
-        .privacy-content h2:first-child {
-            margin-top: 0;
-        }
+        .privacy-content h2:first-child { margin-top: 0; }
         .privacy-content p {
-            color: #6c757d;
-            margin-bottom: 15px;
-            font-size: 0.95rem;
+            color: #6c757d; margin-bottom: 12px; font-size: 0.92rem;
         }
         .privacy-content ul {
-            margin: 10px 0 20px 20px;
-            color: #6c757d;
+            margin: 8px 0 18px 20px; color: #6c757d;
         }
         .privacy-content ul li {
-            margin-bottom: 8px;
-            font-size: 0.95rem;
+            margin-bottom: 6px; font-size: 0.92rem;
         }
-        .privacy-content ul li::marker {
-            color: #1a5e1a;
+        .privacy-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            background: rgba(26,94,26,0.1); color: #1a5e1a;
+            padding: 8px 16px; border-radius: 50px;
+            font-size: 0.85rem; font-weight: 500;
+            margin-bottom: 20px;
         }
+        .privacy-badge i { color: #1a5e1a; }
         .last-updated {
-            background: rgba(26, 94, 26, 0.05);
+            background: rgba(26,94,26,0.05);
             border-left: 4px solid #1a5e1a;
-            padding: 15px 20px;
-            border-radius: 0 10px 10px 0;
-            margin-bottom: 25px;
+            padding: 12px 18px; border-radius: 0 8px 8px 0;
+            margin-bottom: 20px; font-size: 0.85rem;
         }
-        .last-updated strong {
-            color: #1a5e1a;
-        }
+        .last-updated strong { color: #1a5e1a; }
         .privacy-footer {
-            text-align: center;
-            padding: 30px 20px;
-            color: #6c757d;
-            font-size: 0.85rem;
+            text-align: center; padding: 25px 20px;
+            color: #6c757d; font-size: 0.82rem;
             border-top: 1px solid #e9ecef;
-            max-width: 800px;
-            margin: 0 auto;
+            max-width: 750px; margin: 0 auto;
         }
-        .privacy-footer a {
-            color: #1a5e1a;
-            text-decoration: none;
-        }
+        .privacy-footer a { color: #1a5e1a; text-decoration: none; }
         @media (max-width: 768px) {
-            .privacy-header h1 { font-size: 1.8rem; }
-            .privacy-content { margin: -20px 15px 40px; padding: 30px 25px; }
+            .privacy-header h1 { font-size: 1.6rem; }
+            .privacy-content { margin: -15px 12px 35px; padding: 28px 22px; }
         }
     </style>
 </head>
 <body>
 
     <div class="privacy-header">
-        <a href="index.html" class="back-btn">
+        <a href="/PD_LIMAU/index.html" class="back-btn">
             <i class="fas fa-arrow-left"></i> Kembali ke Beranda
         </a>
         <h1>Kebijakan Privasi</h1>
-        <p>Padang Limau Negeri Indah - Aplikasi Wisata</p>
+        <p>Padang Limau Negeri Indah - Aplikasi Display Only</p>
     </div>
 
     <div class="privacy-content">
+        <div class="privacy-badge">
+            <i class="fas fa-shield-check"></i>
+            Tanpa Pengumpulan Data Pengguna
+        </div>
+        
         <div class="last-updated">
             <strong>Terakhir Diperbarui:</strong> 30 Mei 2026
         </div>
 
-        <h2>1. Pengantar</h2>
-        <p>Selamat datang di Padang Limau Negeri Indah. Kami menghargai privasi Anda dan berkomitmen untuk melindungi data pribadi Anda. Kebijakan Privasi ini menjelaskan bagaimana kami mengumpulkan, menggunakan, dan melindungi informasi Anda saat menggunakan aplikasi kami.</p>
+        <h2>1. Ringkasan Penting</h2>
+        <p><strong>Aplikasi Padang Limau Negeri Indah adalah aplikasi "Display Only".</strong> Kami <u>tidak mengumpulkan, menyimpan, memproses, atau membagikan</u> data pribadi pengguna dalam bentuk apapun.</p>
 
-        <h2>2. Informasi yang Kami Kumpulkan</h2>
-        <p>Kami dapat mengumpulkan informasi berikut:</p>
+        <h2>2. Data yang TIDAK Kami Kumpulkan</h2>
+        <p>Aplikasi ini tidak meminta atau mengakses:</p>
         <ul>
-            <li><strong>Informasi yang Anda berikan:</strong> Nama, alamat email, nomor telepon, dan pesan yang Anda kirim melalui formulir kontak.</li>
-            <li><strong>Informasi perangkat:</strong> Jenis perangkat, sistem operasi, dan browser yang digunakan.</li>
-            <li><strong>Data penggunaan:</strong> Halaman yang dikunjungi, durasi kunjungan, dan interaksi dalam aplikasi.</li>
-            <li><strong>Info lokasi:</strong> Data lokasi geografis (hanya dengan izin Anda) untuk memberikan rekomendasi wisata terdekat.</li>
+            <li>❌ Nama, email, nomor telepon, atau identitas pribadi</li>
+            <li>❌ Lokasi geografis atau GPS</li>
+            <li>❌ Kontak, foto, atau file perangkat</li>
+            <li>❌ Riwayat browsing atau aktivitas aplikasi lain</li>
+            <li>❌ Data analitik pelacakan pengguna</li>
+            <li>❌ Cookie pelacakan atau fingerprinting</li>
         </ul>
 
-        <h2>3. Bagaimana Kami Menggunakan Informasi</h2>
-        <p>Informasi yang kami kumpulkan digunakan untuk:</p>
+        <h2>3. Data yang Mungkin Tersimpan (Lokal Saja)</h2>
+        <p>Untuk fungsionalitas offline, Service Worker dapat menyimpan:</p>
         <ul>
-            <li>Menyediakan dan meningkatkan layanan wisata kami</li>
-            <li>Merespons pertanyaan dan permintaan Anda</li>
-            <li>Mengirimkan notifikasi tentang promo dan acara wisata</li>
-            <li>Menganalisis penggunaan aplikasi untuk pengalaman yang lebih baik</li>
-            <li>Memastikan keamanan dan integritas aplikasi</li>
+            <li>✅ File HTML, CSS, JavaScript (kode aplikasi)</li>
+            <li>✅ Gambar dan aset visual (ikon, foto destinasi)</li>
+            <li>✅ Data manifest PWA</li>
+        </ul>
+        <p><strong>Catatan:</strong> Semua data di atas disimpan <em>hanya di perangkat Anda</em> melalui Cache API browser. Data tidak dikirim ke server manapun dan dapat dihapus kapan saja melalui pengaturan browser.</p>
+
+        <h2>4. Koneksi Eksternal</h2>
+        <p>Aplikasi memuat aset dari sumber eksternal berikut untuk fungsionalitas tampilan:</p>
+        <ul>
+            <li><strong>Google Fonts:</strong> Untuk tipografi (fonts.googleapis.com)</li>
+            <li><strong>Font Awesome:</strong> Untuk ikon (cdnjs.cloudflare.com)</li>
+            <li><strong>Unsplash:</strong> Untuk gambar placeholder (images.unsplash.com)</li>
+            <li><strong>Google Maps:</strong> Untuk peta embed (google.com/maps)</li>
+        </ul>
+        <p>Kami tidak menambahkan parameter pelacakan pada permintaan ke layanan tersebut. Untuk informasi lebih lanjut, silakan baca kebijakan privasi masing-masing penyedia.</p>
+
+        <h2>5. Izin Aplikasi</h2>
+        <p>Aplikasi ini <strong>tidak meminta izin khusus</strong> seperti:</p>
+        <ul>
+            <li>📍 Akses lokasi</li>
+            <li>📷 Kamera atau mikrofon</li>
+            <li>📁 Penyimpanan eksternal</li>
+            <li>🔔 Notifikasi push</li>
+            <li>👥 Kontak atau kalender</li>
         </ul>
 
-        <h2>4. Berbagi Informasi</h2>
-        <p>Kami tidak menjual, menyewakan, atau membagikan informasi pribadi Anda kepada pihak ketiga untuk tujuan pemasaran. Kami hanya dapat membagikan informasi jika:</p>
+        <h2>6. Keamanan</h2>
+        <p>Karena tidak ada data pengguna yang dikumpulkan, tidak ada risiko kebocoran data pribadi melalui aplikasi ini. Aplikasi di-host dengan enkripsi HTTPS untuk mengamankan transmisi konten.</p>
+
+        <h2>7. Hak Pengguna</h2>
+        <p>Karena kami tidak menyimpan data Anda, hak-hak berikut secara otomatis terpenuhi:</p>
         <ul>
-            <li>Diperlukan oleh hukum atau otoritas berwenang</li>
-            <li>Untuk melindungi hak dan keamanan kami</li>
-            <li>Dengan penyedia layanan yang membantu operasional aplikasi (dengan perjanjian kerahasiaan)</li>
+            <li>✅ Hak untuk mengakses data: Tidak ada data yang perlu diakses</li>
+            <li>✅ Hak untuk memperbaiki data: Tidak berlaku</li>
+            <li>✅ Hak untuk menghapus data: Hapus cache browser jika diinginkan</li>
+            <li>✅ Hak untuk membatasi pemrosesan: Tidak berlaku</li>
+            <li>✅ Hak untuk portabilitas data: Tidak berlaku</li>
         </ul>
 
-        <h2>5. Keamanan Data</h2>
-        <p>Kami menggunakan langkah-langkah keamanan teknis dan organisasi yang sesuai untuk melindungi data pribadi Anda dari akses tidak sah, kehilangan, atau penyalahgunaan. Namun, tidak ada sistem yang 100% aman, dan kami tidak dapat menjamin keamanan absolut.</p>
-
-        <h2>6. Hak Anda</h2>
-        <p>Anda memiliki hak untuk:</p>
+        <h2>8. Perubahan Kebijakan</h2>
+        <p>Jika di masa depan kami memutuskan untuk menambahkan fitur yang memerlukan data (dengan persetujuan eksplisit), kami akan:</p>
         <ul>
-            <li>Mengakses data pribadi yang kami simpan tentang Anda</li>
-            <li>Memperbarui atau memperbaiki informasi yang tidak akurat</li>
-            <li>Meminta penghapusan data pribadi Anda</li>
-            <li>Menolak pemrosesan data untuk tujuan pemasaran</li>
-            <li>Menarik persetujuan kapan saja</li>
+            <li>Memperbarui kebijakan ini dengan jelas</li>
+            <li>Meminta persetujuan Anda sebelum mengaktifkan fitur tersebut</li>
+            <li>Memberikan opsi untuk menonaktifkan atau menghapus data</li>
         </ul>
 
-        <h2>7. Cookie dan Teknologi Serupa</h2>
-        <p>Aplikasi kami dapat menggunakan cookie dan teknologi serupa untuk meningkatkan pengalaman pengguna, menganalisis penggunaan, dan menyimpan preferensi Anda. Anda dapat mengontrol penggunaan cookie melalui pengaturan browser atau perangkat Anda.</p>
-
-        <h2>8. Layanan Pihak Ketiga</h2>
-        <p>Aplikasi kami dapat berisi tautan ke situs web atau layanan pihak ketiga (seperti Google Maps, media sosial). Kami tidak bertanggung jawab atas kebijakan privasi dari situs atau layanan tersebut. Kami menyarankan Anda membaca kebijakan privasi mereka sebelum memberikan informasi pribadi.</p>
-
-        <h2>9. Privasi Anak-Anak</h2>
-        <p>Layanan kami tidak ditujukan untuk anak-anak di bawah usia 13 tahun. Kami tidak secara sadar mengumpulkan informasi pribadi dari anak-anak. Jika Anda menemukan bahwa anak Anda telah memberikan informasi pribadi, silakan hubungi kami segera.</p>
-
-        <h2>10. Perubahan Kebijakan</h2>
-        <p>Kami dapat memperbarui Kebijakan Privasi ini dari waktu ke waktu. Setiap perubahan akan diumumkan melalui aplikasi dan tanggal "Terakhir Diperbarui" akan diubah. Kami menyarankan Anda untuk meninjau kebijakan ini secara berkala.</p>
-
-        <h2>11. Hubungi Kami</h2>
-        <p>Jika Anda memiliki pertanyaan atau kekhawatiran tentang Kebijakan Privasi ini, silakan hubungi kami:</p>
+        <h2>9. Hubungi Kami</h2>
+        <p>Untuk pertanyaan tentang kebijakan privasi ini, silakan hubungi:</p>
         <ul>
-            <li><strong>Email:</strong> privasi@padanglimau.go.id</li>
-            <li><strong>Telepon:</strong> +62 812-3456-7890</li>
+            <li><strong>Email:</strong> <a href="mailto:antocs54@gmail.com">antocs54@gmail.com</a></li>
             <li><strong>Alamat:</strong> Padang Limau, Sumatera, Indonesia</li>
         </ul>
     </div>
 
     <div class="privacy-footer">
         <p>&copy; 2026 Padang Limau Negeri Indah. Hak Cipta Dilindungi.</p>
+        <p style="margin-top:8px;">Aplikasi Display Only - <a href="/PD_LIMAU/index.html">Kembali ke Beranda</a></p>
     </div>
 
     <script>
+        // Register SW for offline access to privacy page
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js');
+                navigator.serviceWorker.register('/PD_LIMAU/sw.js', { scope: '/PD_LIMAU/' });
             });
         }
     </script>
