@@ -193,9 +193,9 @@ if ($user) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PDlimau - Dashboard</title>
-<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="./assets/style.css">
 <link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <style>
 .media { max-width: 100%; margin: 10px 0; border-radius: 8px; }
 .link-preview { margin: 10px 0; }
@@ -609,7 +609,7 @@ document.addEventListener("DOMContentLoaded", () => {
    REGISTRASI SERVICE WORKER
    ============================================================ */
 if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/service-worker.js")
+    navigator.serviceWorker.register("./service-worker.js")
         .then(reg => console.log("✅ Service Worker aktif:", reg.scope))
         .catch(err => console.error("❌ Service Worker gagal:", err));
 }
