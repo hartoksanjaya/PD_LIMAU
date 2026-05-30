@@ -1,305 +1,647 @@
-<!DOCTYPE html>
+<?php
+ini_set('upload_max_filesize', '1000M');
+ini_set('post_max_size', '1000M');
+ini_set('max_execution_time', 600);
+ini_set('max_input_time', 600);
+ini_set('memory_limit', '1024M');
+require_once 'config.php';
+$user = is_logged_in() ? current_user($pdo) : null;
+
+// ==========================================================
+// ** LOGIKA PENCARIAN BARU (POST & USER) **
+// ==========================================================
+$searchTerm = $_GET['q'] ?? '';
+$searchParam = "%{$searchTerm}%";
+$whereClause = '';
+$queryParams = [];
+$searchedUsers = [];
+
+if (!empty($searchTerm)) {
+    // 1. Cari Pengguna (User) berdasarkan nama
+    $userSearchStmt = $pdo->prepare("SELECT id, name, avatar FROM users WHERE name LIKE ? LIMIT 10");
+    $userSearchStmt->execute([$searchParam]);
+    $searchedUsers = $userSearchStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 2. Modifikasi kueri Postingan untuk filter berdasarkan konten
+    $whereClause = ' WHERE p.content LIKE ? ';
+    $queryParams[] = $searchParam;
+
+    $stmt = $pdo->prepare("
+        SELECT 
+            p.*, 
+            u.name, 
+            u.avatar
+        FROM posts p 
+        LEFT JOIN users u ON p.user_id = u.id 
+        {$whereClause}
+        ORDER BY p.created_at DESC 
+        LIMIT 50
+    ");
+    $stmt->execute($queryParams);
+    $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} else {
+    // Kueri asli jika tidak ada pencarian
+    $stmt = $pdo->query('
+        SELECT 
+            p.*, 
+            u.name, 
+            u.avatar
+        FROM posts p 
+        LEFT JOIN users u ON p.user_id = u.id 
+        ORDER BY p.created_at DESC 
+        LIMIT 50');
+    $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+// ==========================================================
+
+function getEmbed($url) {
+    $url = trim($url);
+
+    // === YOUTUBE ===
+    if (preg_match('/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^\s&]+)/', $url, $m)) {
+        $id = $m[1];
+        return "
+        <div class='link-embed'>
+            <iframe width='100%' height='300'
+                src='https://www.youtube.com/embed/$id'
+                frameborder='0' allowfullscreen></iframe>
+        </div>";
+    }
+    
+    // === SNACK VIDEO (FIX & FLEKSIBEL) ===
+    $snack_id = null;
+    
+    // 1. Deteksi tautan EMBED (format: .../embed/ID)
+    if (preg_match('/snackvideo\.com\/embed\/(\d+)/', $url, $m)) {
+        $snack_id = $m[1];
+    } 
+    // 2. Deteksi tautan PUBLIK/SHARE (format: .../p/ID)
+    else if (preg_match('/snackvideo\.com\/p\/(\d+)/', $url, $m)) {
+        $snack_id = $m[1];
+    }
+
+    if ($snack_id) {
+        $embedUrl = "https://www.snackvideo.com/embed/{$snack_id}";
+        return "
+        <div class='link-embed'>
+            <iframe width='100%' height='400'
+                src='{$embedUrl}'
+                frameborder='0' 
+                allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share' 
+                allowfullscreen></iframe>
+        </div>";
+    }
+
+    // === TIKTOK ===
+    // Regex: menangkap ID dari tautan KANONIS
+    if (preg_match('/tiktok\.com\/@[\w\.-]+\/video\/(\d+)/', $url, $m)) {
+        // Tautan Publik (berhasil di-embed)
+        return "
+        <blockquote class='tiktok-embed' cite='$url' data-video-id='{$m[1]}'>
+            <section><a target='_blank' href='$url'>Video TikTok</a></section>
+        </blockquote>"; 
+    }
+
+    // Deteksi tautan pendek/vt.tiktok.com (gagal di-embed)
+    if (preg_match('/vt\.tiktok\.com\/([a-zA-Z0-9]+)\//', $url, $m) || strpos($url, 'vt.tiktok.com') !== false) {
+        // Pesan error
+        return "<div style='color: #FFD700; background: #B22222; padding: 10px; border-radius: 5px;'>
+                    ⚠️ Gagal Embed TikTok. Harap salin URL video saat Anda LOGOUT atau dari tombol 'Salin Tautan' resmi. (Gunakan format https://www.tiktok.com/@user/video/ID)
+                </div>
+                <a href='$url' target='_blank'>$url</a>";
+    }
+
+    // === FACEBOOK (video/post/status) ===
+
+    // 1. Deteksi Tautan Bermasalah (Share/Login Link: /share/v/)
+    if (strpos($url, '/share/v/') !== false) {
+        return "<div style='color: #FFD700; background: #B22222; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
+                    ⚠️ Gagal Embed Facebook. Harap salin **URL Saat Logout** video/postingan tersebut (gunakan format /reel/ID atau /post/ID). Tautan Share/Login tidak didukung.
+                </div>
+                <a href='$url' target='_blank'>Lihat Link yang Gagal</a>";
+    }
+
+    // 2. Deteksi Tautan Publik yang Valid (Reel, Post, Video Permalink)
+    if (strpos($url, 'facebook.com') !== false && 
+        (strpos($url, '/reel/') !== false || strpos($url, '/post/') !== false || strpos($url, '/videos/') !== false)) {
+        
+        // Tautan Publik (berhasil di-embed)
+        return "
+        <div class='fb-responsive-container'> 
+            <div class='fb-post'
+                data-href='$url'
+                data-width='auto'  
+                data-show-text='true'></div> </div>";
+    }
+
+    // 3. Fallback (Jika hanya mengandung facebook.com tanpa format spesifik, untuk mencoba)
+    if (strpos($url, 'facebook.com') !== false) {
+        return "
+        <div class='fb-responsive-container'> 
+            <div class='fb-post'
+                data-href='$url'
+                data-width='auto'  
+                data-show-text='true'></div>
+        </div>";
+    }
+
+    // === Tautan Biasa ===
+    return "<a href='$url' target='_blank'>$url</a>";
+}
+function extractUrls($text){
+    preg_match_all('/https?\:\/\/[^\s]+/i', $text, $matches);
+    return $matches[0] ?? [];
+}
+// ===== Notifikasi Umum (Like, Comment, Share, Post Baru Teman) ======
+$moreNotif = [];
+$notifTotal = 0;
+
+if ($user) {
+    $notifQuery = $pdo->prepare("
+        SELECT n.*, u.name, u.avatar
+        FROM notifications n
+        JOIN users u ON n.from_user = u.id
+        WHERE n.user_id = ? AND n.is_read = 0 -- HANYA AMBIL YANG BELUM DIBACA
+        ORDER BY n.created_at DESC
+        LIMIT 20
+    ");
+    $notifQuery->execute([$user['id']]);
+    $moreNotif = $notifQuery->fetchAll(PDO::FETCH_ASSOC);
+    $notifTotal = count($moreNotif);
+}
+// ===== Notifikasi teman ======
+$notifCount = 0;
+$requests = [];
+if ($user) {
+  $notifStmt = $pdo->prepare("SELECT f.id AS req_id, u.id AS sender_id, u.name, u.avatar
+                              FROM friends f
+                              JOIN users u ON f.requester_id = u.id
+                              WHERE f.receiver_id=? AND f.status='pending'");
+  $notifStmt->execute([$user['id']]);
+  $requests = $notifStmt->fetchAll(PDO::FETCH_ASSOC);
+  $notifCount = count($requests) + $notifTotal;
+}
+
+// Ambil semua posting terbaru (LOGIKA SUDAH DIPINDAHKAN KE ATAS)
+?>
+<!doctype html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redirecting...</title>
-      <!-- 📱 PWA -->
-    <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icon-192.png">
-    <meta name="theme-color" content="#D4AF37">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    
-    <!-- Metode 1: Meta Refresh (fallback) -->
-    <meta http-equiv="refresh" content="0;url=https://pdlimau.hartok.my.id/">
-    
-    <!-- Metode 2: JavaScript Redirect (lebih cepat) -->
-    <script type="text/javascript">
-        // Redirect langsung menggunakan JavaScript
-        window.location.href = "https://pdlimau.hartok.my.id/";
-    </script>
-    
-    <!-- Styles sederhana untuk pengalaman pengguna -->
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            text-align: center;
-        }
-        .container {
-            padding: 30px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 15px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-        }
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 5px solid rgba(255, 255, 255, 0.3);
-            border-top: 5px solid white;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        a {
-            color: #ffd700;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-    </style>
+    <meta name="referrer" content="no-referrer-when-downgrade" />
+    <meta name="90356292464915216df614ca9c3e61da463a14b3" content="90356292464915216df614ca9c3e61da463a14b3" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDlimau - Dashboard</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+.media { max-width: 100%; margin: 10px 0; border-radius: 8px; }
+.link-preview { margin: 10px 0; }
+.add-friend-btn { background: #ffcc00; color: #000; padding: 5px 10px; border-radius: 6px; border: none; cursor: pointer; font-weight: bold;}
+.add-friend-btn.added { background: #00cc66; color: #fff; }
+.notification { position: relative; display: inline-block; margin-left: 15px; cursor: pointer; }
+.notification .count { position: absolute; top: -5px; right: -8px; background: red; color: white; font-size: 12px; border-radius: 50%; padding: 2px 5px; }
+#notif-popup { display: none; position: absolute; right: 20px; top: 60px; background: white; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); width: 280px; z-index: 1000; padding: 10px; }
+.request-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
+.request-item img { width: 40px; height: 40px; border-radius: 50%; margin-right: 8px; object-fit: cover; }
+.request-buttons button { padding: 4px 8px; border: none; border-radius: 5px; cursor: pointer; }
+.accept { background: #4CAF50; color: #fff; }
+.decline { background: #f44336; color: #fff; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="spinner"></div>
-        <h2>🔄 Sedang mengalihkan...</h2>
-        <p>Anda akan segera diarahkan ke:</p>
-        <p><a href="https://pdlimau.hartok.my.id/" target="_blank">https://hartok.my.id/MERYSA/</a></p>
-        <p><small>Jika tidak diarahkan otomatis, <a href="https://pdlimau.hartok.my.id/">klik di sini</a>.</small></p>
+    <div id="fb-root"></div>
+<script async defer crossorigin="anonymous" src="https://connect.facebook.net/id_ID/sdk.js#xfbml=1&version=v24.0&appId=APP_ID"></script>
+<?php if (isset($_SESSION['success'])): ?>
+    <div class="notification success"><?= $_SESSION['success']; unset($_SESSION['success']); ?></div>
+<?php endif; ?>
+<?php if (isset($_SESSION['error'])): ?>
+    <div class="notification error"><?= $_SESSION['error']; unset($_SESSION['error']); ?></div>
+<?php endif; ?>
+
+<header class="header">
+  <div class="logo">🔥 PDlimau</div>
+  <nav class="nav-links">
+      <a href="reels_feature.php" class="active">Video</a>
+    <a href="index.php" class="active">Beranda</a>
+    <?php if ($user): ?>
+      <a href="profile.php">Profil Saya</a>
+      <div class="notification" id="notifBell">
+        🔔 <?php if ($notifCount > 0): ?><span class="count"><?= $notifCount ?></span><?php endif; ?>
+      </div>
+      <a href="logout.php">Logout</a>
+    <?php else: ?>
+      <a href="login.php">Masuk</a>
+      <a href="register.php">Daftar</a>
+    <?php endif; ?>
+  </nav>
+  <form action="index.php" method="get" class="search-form">
+    <input type="search" name="q" placeholder="Cari Postingan atau Pengguna..." value="<?= esc($_GET['q'] ?? '') ?>">
+    <button type="submit">Cari</button>
+  </form>
+  </header>
+<?php if ($notifCount > 0): // Hanya tambahkan jika ada notifikasi baru ?>
+<audio id="notifSound" src="assets/ting.mp3" preload="auto"></audio>
+<?php endif; ?>
+
+<?php if ($user): ?>
+<div id="notif-popup">
+  <h4>Notifikasi</h4>
+
+  <?php if (!empty($requests)): ?>
+  <?php foreach ($requests as $r): ?>
+    <div class="notif-item">
+
+      <a href="profile.php?id=<?= $r['sender_id'] ?>">
+        <img src="<?= esc($r['avatar'] ?: 'uploads/default-avatar.png') ?>">
+      </a>
+
+      <div>
+        <a href="profile.php?id=<?= $r['sender_id'] ?>" class="notif-link">
+          <strong><?= esc($r['name']) ?></strong>
+        </a> mengirim permintaan pertemanan.
+      </div>
+
     </div>
-    <script>
-      // =====================================
-// REGISTER SERVICE WORKER
-// ==========================================
-if ('servic-eWorker' in navigator) {
-  window.addEventListener('load', async () => {
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/'
-      });
-      console.log('[PWA] Service Worker registered:', registration.scope);
+  <?php endforeach; ?>
+<?php endif; ?>
 
-      // Auto update setiap 1 jam
-      setInterval(() => {
-        registration.update();
-      }, 60 * 60 * 1000);
 
-      // Detect update
-      registration.addEventListener('updatefound', () => {
-        const newWorker = registration.installing;
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            showUpdateNotification();
-          }
-        });
-      });
+  <?php if (!empty($moreNotif)): ?>
+    <?php foreach ($moreNotif as $n): ?>
+      <div class="notif-item" data-notif-id="<?= $n['id'] ?>"> 
+        <img src="<?= esc($n['avatar'] ?: 'uploads/default-avatar.png') ?>">
+        <div>
+          <?php if ($n['type'] == 'like'): ?>
+            <strong><?= esc($n['name']) ?></strong> menyukai postingan Anda.
+          <?php elseif ($n['type'] == 'comment'): ?>
+            <strong><?= esc($n['name']) ?></strong> mengomentari postingan Anda.
+          <?php elseif ($n['type'] == 'share'): ?>
+            <strong><?= esc($n['name']) ?></strong> membagikan postingan Anda.
+          <?php elseif ($n['type'] == 'new_post'): ?>
+            <strong><?= esc($n['name']) ?></strong> membuat postingan baru.
+          <?php endif; ?>
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        console.log('[PWA] New service worker activated');
-        window.location.reload();
-      });
+          <?php if ($n['post_id']): ?>
+            <br><a href="post.php?id=<?= $n['post_id'] ?>" class="notif-link mark-as-read">Lihat</a> 
+          <?php endif; ?>
+        </div>
+      </div>
+    <?php endforeach; ?>
+  <?php endif; ?>
 
-    } catch (error) {
-      console.error('[PWA] Service Worker registration failed:', error);
+  <?php if (empty($requests) && empty($moreNotif)): ?>
+    <p>Tidak ada notifikasi baru.</p>
+  <?php endif; ?>
+</div>
+<?php endif; ?>
+
+<main class="dashboard">
+<aside class="sidebar">
+  <?php if (!empty($searchedUsers)): ?>
+    <div class="search-results-users" style="margin-bottom: 20px;">
+      <h4>Hasil Pengguna (<?= count($searchedUsers) ?>)</h4>
+      <ul>
+      <?php foreach ($searchedUsers as $sUser): ?>
+        <li style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 5px;">
+          <img src="<?= esc($sUser['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-mini">
+          <a href="profile.php?id=<?= $sUser['id'] ?>"><strong><?= esc($sUser['name']) ?></strong></a>
+        </li>
+      <?php endforeach; ?>
+      </ul>
+    </div>
+  <?php elseif (!empty($searchTerm)): ?>
+    <div style="margin-bottom: 20px; padding: 10px; border: 1px solid #FFD700; border-radius: 8px;">
+        <p>Tidak ada pengguna yang cocok dengan "<?= esc($searchTerm) ?>"</p>
+    </div>
+  <?php endif; ?>
+  <?php if ($user): ?>
+    <div class="user-card">
+      <img src="<?= esc($user['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-big">
+      <h3><?= esc($user['name']) ?></h3>
+    </div>
+    <ul>
+      <li><a href="profile.php">Edit Profil</a></li>
+      <li><a href="friends.php">Teman</a></li>
+      <li><a href="settings.php">Pengaturan</a></li>
+      <li>
+        <a href="request_deletion.php" 
+           onclick="return confirm('ANDA YAKIN INGIN MEMINTA PENGHAPUSAN AKUN? Semua data, postingan, dan komentar Anda akan dihapus permanen. Aksi ini tidak dapat dibatalkan.');"
+           style="color: red; font-weight: bold;">
+           🗑️ Hapus Akun & Data
+        </a>
+      </li>
+    </ul>
+  <?php else: ?>
+    <div class="guest-card">
+      <h3>Selamat Datang di PDlimau</h3>
+      <p>Gabung sekarang untuk berinteraksi dan membuat postingan.</p>
+      <a href="register.php" class="btn-primary">Daftar Gratis</a>
+    </div>
+  <?php endif; ?>
+</aside>
+
+<section class="feed-area">
+<?php if ($user): ?>
+<form action="post.php" method="post" enctype="multipart/form-data" class="create-post">
+  <textarea name="content" placeholder="Apa yang Anda pikirkan hari ini?" required></textarea>
+  <div class="controls">
+    <input type="file" name="media">
+    <button type="submit">Kirim</button>
+  </div>
+</form>
+<?php endif; ?>
+
+<div class="feed">
+<?php if (!empty($searchTerm)): ?>
+    <h3 style="margin-bottom: 20px;">Hasil Postingan untuk "<?= esc($searchTerm) ?>" (<?= count($posts) ?>)</h3>
+    <?php if (empty($posts)): ?>
+        <div style="padding: 15px; background: rgba(0, 0, 0, 0.1); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
+            Tidak ada postingan yang ditemukan.
+        </div>
+    <?php endif; ?>
+<?php endif; ?>
+<?php foreach ($posts as $p): ?>
+<?php
+$likeCount = $pdo->prepare('SELECT COUNT(*) FROM likes WHERE post_id=?');
+$likeCount->execute([$p['id']]);
+$totalLikes = $likeCount->fetchColumn();
+
+$liked = false;
+if ($user) {
+  $likedStmt = $pdo->prepare('SELECT 1 FROM likes WHERE user_id=? AND post_id=?');
+  $likedStmt->execute([$user['id'], $p['id']]);
+  $liked = $likedStmt->fetch();
+}
+
+// =========================
+// LOGIKA IDENTITAS POST
+// =========================
+
+// Post admin = user_id = 0
+$is_admin_post = ($p['user_id'] == 0);
+
+$post_name = $is_admin_post
+    ? 'Admin'
+    : esc($p['name']);
+
+$post_avatar = $is_admin_post
+    ? '/assets/admin-icon.png'  // Avatar Admin
+    : esc($p['avatar'] ?: 'uploads/default-avatar.png');
+
+$author_id = $p['user_id'];
+
+// =========================
+// HAPUS SEMUA LOGIKA IKLAN ADMIN
+// =========================
+// (Tidak ada $has_admin_ad)
+// (Tidak ada admin_ad_content)
+// (Tidak ada penyisipan ad dari database)
+
+// =========================
+// CEK PERTEMANAN (kecuali admin)
+// =========================
+$isFriend = false;
+
+if ($user && $user['id'] != $author_id && !$is_admin_post) {
+
+    $checkFriend = $pdo->prepare("
+        SELECT 1 FROM friends 
+        WHERE 
+            ((requester_id=? AND receiver_id=?) 
+        OR 
+            (requester_id=? AND receiver_id=?))
+        AND status='accepted'
+    ");
+
+    $checkFriend->execute([
+        $user['id'], $author_id,
+        $author_id, $user['id']
+    ]);
+
+    $isFriend = $checkFriend->fetch();
+}
+?>
+<article class="post">
+  <div class="post-header">
+    <img src="<?= $post_avatar ?>" class="avatar">
+    <div>
+      <?php if (!$is_admin_post): // Link profil hanya untuk user biasa ?>
+        <a href="profile.php?id=<?= $author_id ?>"><strong><?= $post_name ?></strong></a><br>
+      <?php else: // Untuk Admin, tampilkan nama saja ?>
+        <strong><?= $post_name ?></strong><br>
+      <?php endif; ?>
+      <small><?= esc($p['created_at']) ?></small>
+    </div>
+    <?php if ($user && $user['id'] != $author_id && !$is_admin_post): // Tombol hanya untuk user biasa ?>
+      <button class="add-friend-btn <?= $isFriend ? 'added' : '' ?>" data-friend-id="<?= $author_id ?>">
+        <?= $isFriend ? '✅ Sudah Teman' : '➕ Tambah Teman' ?>
+      </button>
+      <a href="block_user.php?id=<?= $author_id ?>" onclick="return confirm('Apakah Anda yakin ingin memblokir <?= esc($p['name']) ?>?')" class="btn btn-sm btn-danger" style="margin-left: 5px;">
+        🚫 Blokir
+      </a>
+    <?php endif; ?>
+  </div>
+
+  <div class="post-body">
+    <p><?= nl2br(esc($p['content'])) ?></p>
+    <script type="text/javascript">
+	atOptions = {
+		'key' : '1c50b6417d68848f731d176ec761db97',
+		'format' : 'iframe',
+		'height' : 50,
+		'width' : 320,
+		'params' : {}
+	};
+</script>
+<script type="text/javascript" src="//www.highperformanceformat.com/1c50b6417d68848f731d176ec761db97/invoke.js"></script>
+<?php if ($p['media']): ?>
+<?php if (strpos($p['media_type'],'video') !== false): ?>
+<!-- ======== VIDEO UTAMA TANPA IKLAN VAST ======== -->
+<div class="video-wrapper" style="position: relative; width: 100%;">
+    <video
+        id="mainVideo<?= $p['id'] ?>"
+        controls
+        playsinline
+        style="width:100%;"
+        src="<?= esc($p['media']) ?>">
+    </video>
+</div>
+
+<?php elseif (strpos($p['media_type'],'image') !== false): ?>
+    <img src="<?= esc($p['media']) ?>" class="media">
+<?php endif; ?>
+<?php endif; ?>
+
+<?php
+$urls = extractUrls($p['content']);
+foreach($urls as $u){
+    echo "<div class='link-preview'>".getEmbed($u)."</div>";
+}
+?>
+    </div>
+
+    <div class="post-stats" style="padding: 5px 10px; font-size: 0.9em; color: #777;">
+    👁️ Dilihat: <?= number_format($p['views_count']) ?> Kali
+  </div>
+  <div class="post-actions">
+    <?php if ($user): ?>
+      <form action="like.php" method="post" style="display:inline;">
+        <input type="hidden" name="post_id" value="<?= $p['id'] ?>">
+        <button type="submit" class="like-btn"><?= $liked ? '💖 Batal Suka' : '🤍 Suka' ?> (<?= $totalLikes ?>)</button>
+      </form>
+      <button type="button" class="comment-btn" onclick="toggleComment(<?= $p['id'] ?>)">💬 Komentar</button>
+      <button type="button" class="share-btn" onclick="sharePost(<?= $p['id'] ?>)">🔗 Bagikan</button>
+
+    <?php else: ?>
+      <button class="like-btn" onclick="loginPrompt()">🤍 Suka (<?= $totalLikes ?>)</button>
+      <button class="comment-btn" onclick="loginPrompt()">💬 Komentar</button>
+      <button class="share-btn" onclick="loginPrompt()">🔗 Bagikan</button>
+    <?php endif; ?>
+
+    <?php if ($user && $p['user_id'] == $user['id']): ?>
+      <a href="edit_post.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-warning">✏️ Edit</a>
+      <a href="delete_post.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-danger" onclick="return confirm('Hapus postingan ini?')">🗑️ Hapus</a
+      <?php else: ?>
+        <a href="report_post.php?id=<?= $p['id'] ?>" onclick="return confirm('Apakah Anda yakin ingin melaporkan postingan ini?')" class="btn btn-sm btn-info" style="background: #e74c3c; color: white;">🚨 Laporkan</a>
+      <?php endif; ?>
+  </div>
+
+  <div id="comment-box-<?= $p['id'] ?>" class="comment-box" style="display:none;">
+    <?php if ($user): ?>
+      <form action="comment.php" method="post" class="comment-form">
+        <input type="hidden" name="post_id" value="<?= $p['id'] ?>">
+        <input type="text" name="content" placeholder="Tulis komentar..." required>
+        <button type="submit">Kirim</button>
+      </form>
+    <?php endif; ?>
+
+
+    <?php
+    $stmtC = $pdo->prepare('SELECT c.*, u.name, u.avatar 
+                             FROM comments c 
+                             JOIN users u ON c.user_id=u.id 
+                             WHERE post_id=? 
+                             ORDER BY c.id DESC');
+    $stmtC->execute([$p['id']]);
+    $comments = $stmtC->fetchAll();
+    foreach ($comments as $c):
+    ?>
+    <div class="comment">
+      <img src="<?= esc($c['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-mini">
+      <div class="comment-text">
+        <strong><?= esc($c['name']) ?>:</strong>
+        <span><?= esc($c['content']) ?></span>
+      </div>
+    </div>
+    <?php endforeach; ?>
+  </div>
+</article>
+<?php endforeach; ?>
+</div>
+</section>
+</main>
+<div class="admin-container" aria-hidden="false">
+    <?php if (!empty($_SESSION['admin'])): ?>
+        <a href="admin_dashboard.php" class="admin-btn" title="Dashboard Admin">Admin</a>
+        <a href="admin_change_password.php" class="admin-login-btn" title="Ganti Password Admin">Ganti Sandi</a>
+    <?php else: ?>
+        <a href="admin_login.php" class="admin-login-btn" title="Login Admin">Login Admin</a>
+    <?php endif; ?>
+</div>
+<footer class="footer">
+    <p><a href="privasi.html" style="color: #FFD700; text-decoration: underline; margin-right: 15px;">Kebijakan Privasi</a></p>
+  <p>© <?= date('Y') ?> PDlimau - Platform Sosial Kreatif Indonesia By Hartok Sanjaya </p>
+</footer>
+<script>
+const allVideos = document.querySelectorAll("video");
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    const vid = entry.target;
+
+    if (entry.isIntersecting) {
+      allVideos.forEach(v => { if (v !== vid) v.pause(); });
+      vid.play().catch(()=>{});
+    } else {
+      vid.pause();
     }
   });
-}
+}, { threshold: 0.6 });
 
-// ==========================================
-// CAPTURE INSTALL PROMPT
-// ==========================================
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  console.log('[PWA] Install prompt captured');
+allVideos.forEach(video => observer.observe(video));
+</script>
+<script>
+/* ============================================================
+   VARIABEL PHP → JS
+   ============================================================ */
 
-  setTimeout(() => {
-    showInstallButton();
-  }, 3000);
-});
+// Jumlah notifikasi total
+const totalNotifCount = <?= intval($notifCount ?? 0) ?>;
 
-// ==========================================
-// TOMBOL INSTALL
-// ==========================================
-function showInstallButton() {
-  const existingBtn = document.getElementById('installBtn');
-  if (existingBtn) return;
+// Public Key VAPID (WAJIB)
+const VAPID_PUBLIC_KEY = "BAr0jbbmFIH5P0-lNRXqAhcOSRs84PJJ0Pq0q_tr2u9Q7PGvSw9rFyP9SZBfyE0H2FjaajmG2vb1V55VBbgbWpA";
 
-  const installBtn = document.createElement('button');
-  installBtn.id = 'installBtn';
-  installBtn.innerHTML = '📲 Install App';
 
-  installBtn.style.cssText = `
-    position: fixed; bottom: 80px; left: 20px; z-index: 1500;
-    background: linear-gradient(135deg, #D4AF37, #AA8C2C);
-    color: #0A0A0A; border: none; padding: 12px 20px; border-radius: 25px;
-    font-weight: 600; font-size: 0.85rem; cursor: pointer;
-    box-shadow: 0 5px 20px rgba(212,175,55,0.4);
-    display: flex; align-items: center; gap: 8px;
-    font-family: 'Poppins', sans-serif;
-  `;
+// ID pengguna saat ini (null bila tidak login)
+const CURRENT_USER_ID = <?= isset($user['id']) ? intval($user['id']) : 'null' ?>;
+</script>
 
-  installBtn.onclick = () => {
-    showInstallOptions();
-  };
+<script src="/assets/script.js"></script>
 
-  document.body.appendChild(installBtn);
-
-  // Auto hide
-  setTimeout(() => {
-    installBtn.style.opacity = '0';
-    installBtn.style.transform = 'translateY(100px)';
-    installBtn.style.transition = 'all 0.5s ease';
-    setTimeout(() => installBtn.remove(), 500);
-  }, 30000);
-}
-
-// ==========================================
-// MODAL PILIHAN INSTALL
-// ==========================================
-function showInstallOptions() {
-  const modal = document.createElement('div');
-  modal.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 2000;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  `;
-
-  modal.innerHTML = `
-    <div style="
-      background:#111;
-      padding:20px;
-      border-radius:15px;
-      text-align:center;
-      width:90%;
-      max-width:300px;
-      font-family:'Poppins',sans-serif;
-      color:#fff;
-    ">
-      <h3 style="margin-bottom:15px;">Pilih Instalasi</h3>
-
-      <button id="pwaInstall" style="
-        width:100%; margin-bottom:10px;
-        padding:12px; border:none;
-        border-radius:10px;
-        background:#D4AF37; color:#000;
-        font-weight:bold;
-        cursor:pointer;
-      ">
-        📲 Install Langsung
-      </button>
-
-      <button id="playstoreInstall" style="
-        width:100%;
-        padding:12px;
-        border:none;
-        border-radius:10px;
-        background:#0f9d58;
-        color:#fff;
-        font-weight:bold;
-        cursor:pointer;
-      ">
-        ▶️ Play Store
-      </button>
-
-      <button id="closeModal" style="
-        margin-top:10px;
-        background:none;
-        border:none;
-        color:#aaa;
-        cursor:pointer;
-      ">Tutup</button>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  // INSTALL PWA
-  document.getElementById('pwaInstall').onclick = async () => {
-    if (!deferredPrompt) {
-      showToast('Browser tidak mendukung install langsung');
-      return;
+<script>
+/* ============================================================
+   AKTIFKAN SUBSCRIBE PUSH OTOMATIS
+   ============================================================ */
+document.addEventListener("DOMContentLoaded", () => {
+    if (typeof subscribeUserToPush === "function") {
+        subscribeUserToPush();
+    } else {
+        console.error("❌ subscribeUserToPush() tidak ditemukan. Pastikan ada di script.js");
     }
+});
+</script>
 
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
+<script>
+/* ============================================================
+   REGISTRASI SERVICE WORKER
+   ============================================================ */
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js")
+        .then(reg => console.log("✅ Service Worker aktif:", reg.scope))
+        .catch(err => console.error("❌ Service Worker gagal:", err));
+}
+</script>
 
-    if (outcome === 'accepted') {
-      console.log('[PWA] User accepted install');
-      showToast('Aplikasi berhasil di-install! 🎉');
+<script>
+/* ============================================================
+   FUNGSI TAMBAHAN – Kamera
+   ============================================================ */
+function openCamera() {
+    const video = document.getElementById('video');
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => video.srcObject = stream)
+            .catch(err => alert("Tidak bisa membuka kamera: " + err));
+    } else {
+        alert("Browser tidak mendukung kamera");
     }
-
-    deferredPrompt = null;
-    modal.remove();
-  };
-
-  // PLAY STORE (GANTI LINK INI)
-  document.getElementById('playstoreInstall').onclick = () => {
-    window.open('https://play.google.com/store/apps/details?id=io.github.hartoksanjaya.twa', '_blank');
-  };
-
-  // CLOSE
-  document.getElementById('closeModal').onclick = () => {
-    modal.remove();
-  };
 }
-
-// ==========================================
-// STATUS INSTALLED
-// ==========================================
-window.addEventListener('appinstalled', () => {
-  isPWAInstalled = true;
-  console.log('[PWA] App installed');
-  showToast('Terima kasih telah meng-install MERYSA! 💛');
-
-  const installBtn = document.getElementById('installBtn');
-  if (installBtn) installBtn.remove();
-});
-
-// ==========================================
-// UPDATE NOTIFICATION
-// ==========================================
-function showUpdateNotification() {
-  if (confirm('Versi baru tersedia! Refresh untuk update?')) {
-    navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
-  }
-}
-
-// ==========================================
-// ONLINE / OFFLINE STATUS
-// ==========================================
-window.addEventListener('online', () => {
-  showToast('Koneksi internet kembali! 🌐');
-});
-
-window.addEventListener('offline', () => {
-  showToast('Mode offline - Data tersimpan di perangkat 📴');
-});
-
-// ==========================================
-// PRECACHE
-// ==========================================
-if ('serviceWorker' in navigator && navigator.onLine) {
-  navigator.serviceWorker.ready.then((registration) => {
-    registration.active.postMessage({
-      type: 'CACHE_URLS',
-      urls: [
-        '/#products',
-        '/#hero'
-      ]
-    });
-  });
-}
-
-console.log('[PWA] Toko pdlimau PWA Ready');
-    </script>
+</script>
+<script>
+(function(zufs){
+var d = document,
+    s = d.createElement('script'),
+    l = d.scripts[d.scripts.length - 1];
+s.settings = zufs || {};
+s.src = "\/\/cooperative-reveal.com\/bhX.VhszdiGMlr0UYTW\/cn\/leGm-9DuCZqUMlhkYPFT\/Y-3JMlTRI_zCO\/Tjk\/t\/N\/j\/cqxFMLjeQdwAM\/Ad";
+s.async = true;
+s.referrerPolicy = 'no-referrer-when-downgrade';
+l.parentNode.insertBefore(s, l);
+})({})
+</script>
+<script async src="https://www.tiktok.com/embed.js"></script>
 </body>
 </html>
