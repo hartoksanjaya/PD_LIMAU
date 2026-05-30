@@ -1,647 +1,1775 @@
-<?php
-ini_set('upload_max_filesize', '1000M');
-ini_set('post_max_size', '1000M');
-ini_set('max_execution_time', 600);
-ini_set('max_input_time', 600);
-ini_set('memory_limit', '1024M');
-require_once 'config.php';
-$user = is_logged_in() ? current_user($pdo) : null;
-
-// ==========================================================
-// ** LOGIKA PENCARIAN BARU (POST & USER) **
-// ==========================================================
-$searchTerm = $_GET['q'] ?? '';
-$searchParam = "%{$searchTerm}%";
-$whereClause = '';
-$queryParams = [];
-$searchedUsers = [];
-
-if (!empty($searchTerm)) {
-    // 1. Cari Pengguna (User) berdasarkan nama
-    $userSearchStmt = $pdo->prepare("SELECT id, name, avatar FROM users WHERE name LIKE ? LIMIT 10");
-    $userSearchStmt->execute([$searchParam]);
-    $searchedUsers = $userSearchStmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // 2. Modifikasi kueri Postingan untuk filter berdasarkan konten
-    $whereClause = ' WHERE p.content LIKE ? ';
-    $queryParams[] = $searchParam;
-
-    $stmt = $pdo->prepare("
-        SELECT 
-            p.*, 
-            u.name, 
-            u.avatar
-        FROM posts p 
-        LEFT JOIN users u ON p.user_id = u.id 
-        {$whereClause}
-        ORDER BY p.created_at DESC 
-        LIMIT 50
-    ");
-    $stmt->execute($queryParams);
-    $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-} else {
-    // Kueri asli jika tidak ada pencarian
-    $stmt = $pdo->query('
-        SELECT 
-            p.*, 
-            u.name, 
-            u.avatar
-        FROM posts p 
-        LEFT JOIN users u ON p.user_id = u.id 
-        ORDER BY p.created_at DESC 
-        LIMIT 50');
-    $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-// ==========================================================
-
-function getEmbed($url) {
-    $url = trim($url);
-
-    // === YOUTUBE ===
-    if (preg_match('/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^\s&]+)/', $url, $m)) {
-        $id = $m[1];
-        return "
-        <div class='link-embed'>
-            <iframe width='100%' height='300'
-                src='https://www.youtube.com/embed/$id'
-                frameborder='0' allowfullscreen></iframe>
-        </div>";
-    }
-    
-    // === SNACK VIDEO (FIX & FLEKSIBEL) ===
-    $snack_id = null;
-    
-    // 1. Deteksi tautan EMBED (format: .../embed/ID)
-    if (preg_match('/snackvideo\.com\/embed\/(\d+)/', $url, $m)) {
-        $snack_id = $m[1];
-    } 
-    // 2. Deteksi tautan PUBLIK/SHARE (format: .../p/ID)
-    else if (preg_match('/snackvideo\.com\/p\/(\d+)/', $url, $m)) {
-        $snack_id = $m[1];
-    }
-
-    if ($snack_id) {
-        $embedUrl = "https://www.snackvideo.com/embed/{$snack_id}";
-        return "
-        <div class='link-embed'>
-            <iframe width='100%' height='400'
-                src='{$embedUrl}'
-                frameborder='0' 
-                allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share' 
-                allowfullscreen></iframe>
-        </div>";
-    }
-
-    // === TIKTOK ===
-    // Regex: menangkap ID dari tautan KANONIS
-    if (preg_match('/tiktok\.com\/@[\w\.-]+\/video\/(\d+)/', $url, $m)) {
-        // Tautan Publik (berhasil di-embed)
-        return "
-        <blockquote class='tiktok-embed' cite='$url' data-video-id='{$m[1]}'>
-            <section><a target='_blank' href='$url'>Video TikTok</a></section>
-        </blockquote>"; 
-    }
-
-    // Deteksi tautan pendek/vt.tiktok.com (gagal di-embed)
-    if (preg_match('/vt\.tiktok\.com\/([a-zA-Z0-9]+)\//', $url, $m) || strpos($url, 'vt.tiktok.com') !== false) {
-        // Pesan error
-        return "<div style='color: #FFD700; background: #B22222; padding: 10px; border-radius: 5px;'>
-                    ⚠️ Gagal Embed TikTok. Harap salin URL video saat Anda LOGOUT atau dari tombol 'Salin Tautan' resmi. (Gunakan format https://www.tiktok.com/@user/video/ID)
-                </div>
-                <a href='$url' target='_blank'>$url</a>";
-    }
-
-    // === FACEBOOK (video/post/status) ===
-
-    // 1. Deteksi Tautan Bermasalah (Share/Login Link: /share/v/)
-    if (strpos($url, '/share/v/') !== false) {
-        return "<div style='color: #FFD700; background: #B22222; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
-                    ⚠️ Gagal Embed Facebook. Harap salin **URL Saat Logout** video/postingan tersebut (gunakan format /reel/ID atau /post/ID). Tautan Share/Login tidak didukung.
-                </div>
-                <a href='$url' target='_blank'>Lihat Link yang Gagal</a>";
-    }
-
-    // 2. Deteksi Tautan Publik yang Valid (Reel, Post, Video Permalink)
-    if (strpos($url, 'facebook.com') !== false && 
-        (strpos($url, '/reel/') !== false || strpos($url, '/post/') !== false || strpos($url, '/videos/') !== false)) {
-        
-        // Tautan Publik (berhasil di-embed)
-        return "
-        <div class='fb-responsive-container'> 
-            <div class='fb-post'
-                data-href='$url'
-                data-width='auto'  
-                data-show-text='true'></div> </div>";
-    }
-
-    // 3. Fallback (Jika hanya mengandung facebook.com tanpa format spesifik, untuk mencoba)
-    if (strpos($url, 'facebook.com') !== false) {
-        return "
-        <div class='fb-responsive-container'> 
-            <div class='fb-post'
-                data-href='$url'
-                data-width='auto'  
-                data-show-text='true'></div>
-        </div>";
-    }
-
-    // === Tautan Biasa ===
-    return "<a href='$url' target='_blank'>$url</a>";
-}
-function extractUrls($text){
-    preg_match_all('/https?\:\/\/[^\s]+/i', $text, $matches);
-    return $matches[0] ?? [];
-}
-// ===== Notifikasi Umum (Like, Comment, Share, Post Baru Teman) ======
-$moreNotif = [];
-$notifTotal = 0;
-
-if ($user) {
-    $notifQuery = $pdo->prepare("
-        SELECT n.*, u.name, u.avatar
-        FROM notifications n
-        JOIN users u ON n.from_user = u.id
-        WHERE n.user_id = ? AND n.is_read = 0 -- HANYA AMBIL YANG BELUM DIBACA
-        ORDER BY n.created_at DESC
-        LIMIT 20
-    ");
-    $notifQuery->execute([$user['id']]);
-    $moreNotif = $notifQuery->fetchAll(PDO::FETCH_ASSOC);
-    $notifTotal = count($moreNotif);
-}
-// ===== Notifikasi teman ======
-$notifCount = 0;
-$requests = [];
-if ($user) {
-  $notifStmt = $pdo->prepare("SELECT f.id AS req_id, u.id AS sender_id, u.name, u.avatar
-                              FROM friends f
-                              JOIN users u ON f.requester_id = u.id
-                              WHERE f.receiver_id=? AND f.status='pending'");
-  $notifStmt->execute([$user['id']]);
-  $requests = $notifStmt->fetchAll(PDO::FETCH_ASSOC);
-  $notifCount = count($requests) + $notifTotal;
-}
-
-// Ambil semua posting terbaru (LOGIKA SUDAH DIPINDAHKAN KE ATAS)
-?>
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta name="referrer" content="no-referrer-when-downgrade" />
-    <meta name="90356292464915216df614ca9c3e61da463a14b3" content="90356292464915216df614ca9c3e61da463a14b3" />
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PDlimau - Dashboard</title>
-<link rel="stylesheet" href="./assets/style.css">
-<link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="./icon-192.png">
-<style>
-.media { max-width: 100%; margin: 10px 0; border-radius: 8px; }
-.link-preview { margin: 10px 0; }
-.add-friend-btn { background: #ffcc00; color: #000; padding: 5px 10px; border-radius: 6px; border: none; cursor: pointer; font-weight: bold;}
-.add-friend-btn.added { background: #00cc66; color: #fff; }
-.notification { position: relative; display: inline-block; margin-left: 15px; cursor: pointer; }
-.notification .count { position: absolute; top: -5px; right: -8px; background: red; color: white; font-size: 12px; border-radius: 50%; padding: 2px 5px; }
-#notif-popup { display: none; position: absolute; right: 20px; top: 60px; background: white; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); width: 280px; z-index: 1000; padding: 10px; }
-.request-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
-.request-item img { width: 40px; height: 40px; border-radius: 50%; margin-right: 8px; object-fit: cover; }
-.request-buttons button { padding: 4px 8px; border: none; border-radius: 5px; cursor: pointer; }
-.accept { background: #4CAF50; color: #fff; }
-.decline { background: #f44336; color: #fff; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Padang Limau Negeri Indah - Destinasi wisata alam yang memukau dengan pesona keindahan alam Sumatera">
+    <meta name="theme-color" content="#1a5e1a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Padang Limau Negeri Indah - Tempat Wisata</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #1a5e1a;
+            --primary-dark: #0d3d0d;
+            --primary-light: #2d8a2d;
+            --accent: #f0a500;
+            --accent-light: #ffc947;
+            --white: #ffffff;
+            --light: #f8f9fa;
+            --gray: #6c757d;
+            --dark: #212529;
+            --shadow: 0 10px 40px rgba(0,0,0,0.15);
+            --shadow-sm: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            color: var(--dark);
+            overflow-x: hidden;
+            background: var(--white);
+        }
+
+        /* NAVBAR */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            padding: 15px 20px;
+            transition: all 0.4s ease;
+            background: transparent;
+        }
+
+        .navbar.scrolled {
+            background: rgba(26, 94, 26, 0.97);
+            padding: 10px 20px;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.3);
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: var(--white);
+        }
+
+        .nav-logo i {
+            font-size: 1.8rem;
+            color: var(--accent);
+        }
+
+        .nav-logo span {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 30px;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--white);
+            font-weight: 500;
+            font-size: 0.95rem;
+            position: relative;
+            transition: color 0.3s;
+        }
+
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--accent);
+            transition: width 0.3s;
+        }
+
+        .nav-links a:hover::after {
+            width: 100%;
+        }
+
+        .hamburger {
+            display: none;
+            flex-direction: column;
+            cursor: pointer;
+            gap: 5px;
+        }
+
+        .hamburger span {
+            width: 28px;
+            height: 3px;
+            background: var(--white);
+            border-radius: 3px;
+            transition: all 0.3s;
+        }
+
+        .hamburger.active span:nth-child(1) {
+            transform: rotate(45deg) translate(5px, 6px);
+        }
+
+        .hamburger.active span:nth-child(2) {
+            opacity: 0;
+        }
+
+        .hamburger.active span:nth-child(3) {
+            transform: rotate(-45deg) translate(5px, -6px);
+        }
+
+        /* HERO */
+        .hero {
+            height: 100vh;
+            min-height: 600px;
+            background: linear-gradient(135deg, rgba(13, 61, 13, 0.7), rgba(26, 94, 26, 0.5)),
+                        url('https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920') center/cover no-repeat;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--white);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 150px;
+            background: linear-gradient(transparent, var(--white));
+        }
+
+        .hero-content {
+            z-index: 2;
+            padding: 0 20px;
+            animation: fadeInUp 1s ease;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(40px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hero-badge {
+            display: inline-block;
+            background: rgba(240, 165, 0, 0.2);
+            border: 1px solid var(--accent);
+            color: var(--accent-light);
+            padding: 8px 24px;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .hero h1 {
+            font-family: 'Playfair Display', serif;
+            font-size: 3.8rem;
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 15px;
+            text-shadow: 2px 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .hero h1 .highlight {
+            color: var(--accent);
+        }
+
+        .hero p {
+            font-size: 1.15rem;
+            max-width: 600px;
+            margin: 0 auto 35px;
+            opacity: 0.9;
+            line-height: 1.7;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 32px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--dark);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-light);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(240, 165, 0, 0.4);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--white);
+            border: 2px solid var(--white);
+        }
+
+        .btn-outline:hover {
+            background: var(--white);
+            color: var(--primary);
+            transform: translateY(-3px);
+        }
+
+        /* SECTIONS */
+        section {
+            padding: 80px 20px;
+        }
+
+        .section-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+
+        .section-header .label {
+            display: inline-block;
+            background: rgba(26, 94, 26, 0.1);
+            color: var(--primary);
+            padding: 6px 20px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 15px;
+        }
+
+        .section-header h2 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2.5rem;
+            color: var(--primary-dark);
+            margin-bottom: 15px;
+        }
+
+        .section-header p {
+            color: var(--gray);
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.7;
+        }
+
+        /* ABOUT */
+        .about {
+            background: var(--light);
+        }
+
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .about-image {
+            position: relative;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .about-image img {
+            width: 100%;
+            height: 400px;
+            object-fit: cover;
+            display: block;
+        }
+
+        .about-image .floating-card {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: var(--white);
+            padding: 15px 25px;
+            border-radius: 15px;
+            box-shadow: var(--shadow-sm);
+            text-align: center;
+        }
+
+        .floating-card .number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .floating-card .text {
+            font-size: 0.8rem;
+            color: var(--gray);
+        }
+
+        .about-content h3 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2rem;
+            color: var(--primary-dark);
+            margin-bottom: 20px;
+        }
+
+        .about-content p {
+            color: var(--gray);
+            line-height: 1.8;
+            margin-bottom: 20px;
+        }
+
+        .about-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+        }
+
+        .about-feature {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .about-feature i {
+            width: 40px;
+            height: 40px;
+            background: rgba(26, 94, 26, 0.1);
+            color: var(--primary);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+        }
+
+        .about-feature span {
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        /* DESTINATIONS */
+        .destinations-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+        }
+
+        .dest-card {
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            transition: all 0.4s ease;
+            background: var(--white);
+        }
+
+        .dest-card:hover {
+            transform: translateY(-10px);
+            box-shadow: var(--shadow);
+        }
+
+        .dest-card-image {
+            height: 220px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .dest-card-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .dest-card:hover .dest-card-image img {
+            transform: scale(1.1);
+        }
+
+        .dest-card-image .badge {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: var(--accent);
+            color: var(--dark);
+            padding: 5px 14px;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .dest-card-body {
+            padding: 25px;
+        }
+
+        .dest-card-body h3 {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.3rem;
+            color: var(--primary-dark);
+            margin-bottom: 10px;
+        }
+
+        .dest-card-body p {
+            color: var(--gray);
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .dest-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        .dest-card-footer .location {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--gray);
+            font-size: 0.85rem;
+        }
+
+        .dest-card-footer .location i {
+            color: var(--primary);
+        }
+
+        .dest-card-footer .rating {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            color: var(--accent);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        /* GALLERY */
+        .gallery {
+            background: var(--light);
+        }
+
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(2, 200px);
+            gap: 15px;
+        }
+
+        .gallery-item {
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .gallery-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .gallery-item:hover img {
+            transform: scale(1.1);
+        }
+
+        .gallery-item::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(26, 94, 26, 0);
+            transition: background 0.3s;
+        }
+
+        .gallery-item:hover::after {
+            background: rgba(26, 94, 26, 0.3);
+        }
+
+        .gallery-item:nth-child(1) {
+            grid-column: span 2;
+            grid-row: span 2;
+        }
+
+        .gallery-item:nth-child(4) {
+            grid-column: span 2;
+        }
+
+        /* FACILITIES */
+        .facilities-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 25px;
+        }
+
+        .facility-card {
+            text-align: center;
+            padding: 40px 25px;
+            border-radius: 20px;
+            background: var(--white);
+            box-shadow: var(--shadow-sm);
+            transition: all 0.3s ease;
+        }
+
+        .facility-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow);
+        }
+
+        .facility-card .icon {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: var(--white);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin: 0 auto 20px;
+        }
+
+        .facility-card h4 {
+            font-size: 1.1rem;
+            color: var(--primary-dark);
+            margin-bottom: 10px;
+        }
+
+        .facility-card p {
+            color: var(--gray);
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        /* TESTIMONIALS */
+        .testimonials {
+            background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+            color: var(--white);
+        }
+
+        .testimonials .section-header .label {
+            background: rgba(255,255,255,0.15);
+            color: var(--accent-light);
+        }
+
+        .testimonials .section-header h2 {
+            color: var(--white);
+        }
+
+        .testimonials .section-header p {
+            color: rgba(255,255,255,0.7);
+        }
+
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+        }
+
+        .testimonial-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px;
+            padding: 35px;
+            transition: all 0.3s;
+        }
+
+        .testimonial-card:hover {
+            background: rgba(255,255,255,0.15);
+            transform: translateY(-5px);
+        }
+
+        .testimonial-card .stars {
+            color: var(--accent);
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+        }
+
+        .testimonial-card p {
+            font-size: 0.95rem;
+            line-height: 1.7;
+            opacity: 0.9;
+            margin-bottom: 20px;
+            font-style: italic;
+        }
+
+        .testimonial-author {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .testimonial-author img {
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
+        .testimonial-author .name {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .testimonial-author .role {
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+
+        /* CTA */
+        .cta {
+            background: var(--light);
+            text-align: center;
+        }
+
+        .cta-box {
+            background: linear-gradient(135deg, var(--accent), #e69500);
+            border-radius: 30px;
+            padding: 60px 40px;
+            color: var(--dark);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cta-box::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 400px;
+            height: 400px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 50%;
+        }
+
+        .cta-box h2 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2.2rem;
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .cta-box p {
+            font-size: 1rem;
+            opacity: 0.8;
+            max-width: 500px;
+            margin: 0 auto 30px;
+            position: relative;
+        }
+
+        .cta-box .btn {
+            background: var(--primary-dark);
+            color: var(--white);
+            position: relative;
+        }
+
+        .cta-box .btn:hover {
+            background: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        /* CONTACT */
+        .contact-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 50px;
+        }
+
+        .contact-info h3 {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.8rem;
+            color: var(--primary-dark);
+            margin-bottom: 20px;
+        }
+
+        .contact-info p {
+            color: var(--gray);
+            line-height: 1.7;
+            margin-bottom: 30px;
+        }
+
+        .contact-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .contact-item .icon {
+            width: 50px;
+            height: 50px;
+            background: rgba(26, 94, 26, 0.1);
+            color: var(--primary);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .contact-item h4 {
+            font-size: 1rem;
+            color: var(--primary-dark);
+            margin-bottom: 3px;
+        }
+
+        .contact-item p {
+            color: var(--gray);
+            font-size: 0.9rem;
+            margin: 0;
+        }
+
+        .contact-form {
+            background: var(--white);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            color: var(--dark);
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 18px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            font-family: 'Poppins', sans-serif;
+            font-size: 0.9rem;
+            transition: border-color 0.3s;
+            outline: none;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            border-color: var(--primary);
+        }
+
+        .form-group textarea {
+            height: 120px;
+            resize: vertical;
+        }
+
+        .contact-form .btn {
+            width: 100%;
+            justify-content: center;
+            background: var(--primary);
+            color: var(--white);
+        }
+
+        .contact-form .btn:hover {
+            background: var(--primary-dark);
+        }
+
+        /* MAP */
+        .map-section {
+            padding: 0;
+        }
+
+        .map-section iframe {
+            width: 100%;
+            height: 400px;
+            border: none;
+        }
+
+        /* FOOTER */
+        .footer {
+            background: var(--primary-dark);
+            color: var(--white);
+            padding: 60px 20px 30px;
+        }
+
+        .footer-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+
+        .footer-brand h3 {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+        }
+
+        .footer-brand p {
+            color: rgba(255,255,255,0.6);
+            line-height: 1.7;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 12px;
+        }
+
+        .social-links a {
+            width: 40px;
+            height: 40px;
+            background: rgba(255,255,255,0.1);
+            color: var(--white);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+
+        .social-links a:hover {
+            background: var(--accent);
+            color: var(--dark);
+        }
+
+        .footer h4 {
+            font-size: 1rem;
+            margin-bottom: 20px;
+            color: var(--accent);
+        }
+
+        .footer-links {
+            list-style: none;
+        }
+
+        .footer-links li {
+            margin-bottom: 10px;
+        }
+
+        .footer-links a {
+            color: rgba(255,255,255,0.6);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.3s;
+        }
+
+        .footer-links a:hover {
+            color: var(--accent);
+        }
+
+        .footer-bottom {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .footer-bottom p {
+            color: rgba(255,255,255,0.5);
+            font-size: 0.85rem;
+        }
+
+        /* SCROLL TO TOP */
+        .scroll-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: var(--primary);
+            color: var(--white);
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow);
+            transition: all 0.3s;
+            z-index: 999;
+        }
+
+        .scroll-top.show {
+            display: flex;
+        }
+
+        .scroll-top:hover {
+            background: var(--accent);
+            color: var(--dark);
+            transform: translateY(-5px);
+        }
+
+        /* INSTALL BANNER */
+        .install-banner {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--white);
+            padding: 15px 20px;
+            box-shadow: 0 -5px 30px rgba(0,0,0,0.15);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            z-index: 9999;
+            flex-wrap: wrap;
+        }
+
+        .install-banner.show {
+            display: flex;
+        }
+
+        .install-banner p {
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .install-banner .btn-install {
+            background: var(--primary);
+            color: var(--white);
+            padding: 10px 24px;
+            border-radius: 50px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        .install-banner .btn-close {
+            background: none;
+            border: none;
+            color: var(--gray);
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+
+        /* MOBILE NAV OVERLAY */
+        .mobile-nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(13, 61, 13, 0.98);
+            z-index: 999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mobile-nav.active {
+            display: flex;
+        }
+
+        .mobile-nav-links {
+            list-style: none;
+            text-align: center;
+        }
+
+        .mobile-nav-links li {
+            margin-bottom: 25px;
+        }
+
+        .mobile-nav-links a {
+            color: var(--white);
+            text-decoration: none;
+            font-size: 1.5rem;
+            font-weight: 600;
+            transition: color 0.3s;
+        }
+
+        .mobile-nav-links a:hover {
+            color: var(--accent);
+        }
+
+        /* ANIMATIONS */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.6s ease;
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .destinations-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .facilities-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .testimonials-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .footer-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .hamburger {
+                display: flex;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero p {
+                font-size: 1rem;
+            }
+
+            .about-grid {
+                grid-template-columns: 1fr;
+                gap: 30px;
+            }
+
+            .destinations-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .gallery-grid {
+                grid-template-columns: repeat(2, 1fr);
+                grid-template-rows: repeat(3, 180px);
+            }
+
+            .gallery-item:nth-child(1) {
+                grid-column: span 2;
+                grid-row: span 1;
+            }
+
+            .gallery-item:nth-child(4) {
+                grid-column: span 1;
+            }
+
+            .facilities-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .testimonials-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .contact-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .section-header h2 {
+                font-size: 2rem;
+            }
+
+            .cta-box h2 {
+                font-size: 1.8rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .facilities-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .about-features {
+                grid-template-columns: 1fr;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+    </style>
 </head>
 <body>
-    <div id="fb-root"></div>
-<script async defer crossorigin="anonymous" src="https://connect.facebook.net/id_ID/sdk.js#xfbml=1&version=v24.0&appId=APP_ID"></script>
-<?php if (isset($_SESSION['success'])): ?>
-    <div class="notification success"><?= $_SESSION['success']; unset($_SESSION['success']); ?></div>
-<?php endif; ?>
-<?php if (isset($_SESSION['error'])): ?>
-    <div class="notification error"><?= $_SESSION['error']; unset($_SESSION['error']); ?></div>
-<?php endif; ?>
 
-<header class="header">
-  <div class="logo">🔥 PDlimau</div>
-  <nav class="nav-links">
-      <a href="reels_feature.php" class="active">Video</a>
-    <a href="index.php" class="active">Beranda</a>
-    <?php if ($user): ?>
-      <a href="profile.php">Profil Saya</a>
-      <div class="notification" id="notifBell">
-        🔔 <?php if ($notifCount > 0): ?><span class="count"><?= $notifCount ?></span><?php endif; ?>
-      </div>
-      <a href="logout.php">Logout</a>
-    <?php else: ?>
-      <a href="login.php">Masuk</a>
-      <a href="register.php">Daftar</a>
-    <?php endif; ?>
-  </nav>
-  <form action="index.php" method="get" class="search-form">
-    <input type="search" name="q" placeholder="Cari Postingan atau Pengguna..." value="<?= esc($_GET['q'] ?? '') ?>">
-    <button type="submit">Cari</button>
-  </form>
-  </header>
-<?php if ($notifCount > 0): // Hanya tambahkan jika ada notifikasi baru ?>
-<audio id="notifSound" src="assets/ting.mp3" preload="auto"></audio>
-<?php endif; ?>
-
-<?php if ($user): ?>
-<div id="notif-popup">
-  <h4>Notifikasi</h4>
-
-  <?php if (!empty($requests)): ?>
-  <?php foreach ($requests as $r): ?>
-    <div class="notif-item">
-
-      <a href="profile.php?id=<?= $r['sender_id'] ?>">
-        <img src="<?= esc($r['avatar'] ?: 'uploads/default-avatar.png') ?>">
-      </a>
-
-      <div>
-        <a href="profile.php?id=<?= $r['sender_id'] ?>" class="notif-link">
-          <strong><?= esc($r['name']) ?></strong>
-        </a> mengirim permintaan pertemanan.
-      </div>
-
-    </div>
-  <?php endforeach; ?>
-<?php endif; ?>
-
-
-  <?php if (!empty($moreNotif)): ?>
-    <?php foreach ($moreNotif as $n): ?>
-      <div class="notif-item" data-notif-id="<?= $n['id'] ?>"> 
-        <img src="<?= esc($n['avatar'] ?: 'uploads/default-avatar.png') ?>">
-        <div>
-          <?php if ($n['type'] == 'like'): ?>
-            <strong><?= esc($n['name']) ?></strong> menyukai postingan Anda.
-          <?php elseif ($n['type'] == 'comment'): ?>
-            <strong><?= esc($n['name']) ?></strong> mengomentari postingan Anda.
-          <?php elseif ($n['type'] == 'share'): ?>
-            <strong><?= esc($n['name']) ?></strong> membagikan postingan Anda.
-          <?php elseif ($n['type'] == 'new_post'): ?>
-            <strong><?= esc($n['name']) ?></strong> membuat postingan baru.
-          <?php endif; ?>
-
-          <?php if ($n['post_id']): ?>
-            <br><a href="post.php?id=<?= $n['post_id'] ?>" class="notif-link mark-as-read">Lihat</a> 
-          <?php endif; ?>
+    <!-- NAVBAR -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-container">
+            <a href="#" class="nav-logo">
+                <i class="fas fa-leaf"></i>
+                <span>Padang Limau</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="#beranda">Beranda</a></li>
+                <li><a href="#tentang">Tentang</a></li>
+                <li><a href="#destinasi">Destinasi</a></li>
+                <li><a href="#galeri">Galeri</a></li>
+                <li><a href="#fasilitas">Fasilitas</a></li>
+                <li><a href="#kontak">Kontak</a></li>
+            </ul>
+            <div class="hamburger" id="hamburger">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
         </div>
-      </div>
-    <?php endforeach; ?>
-  <?php endif; ?>
+    </nav>
 
-  <?php if (empty($requests) && empty($moreNotif)): ?>
-    <p>Tidak ada notifikasi baru.</p>
-  <?php endif; ?>
-</div>
-<?php endif; ?>
+    <!-- MOBILE NAV -->
+    <div class="mobile-nav" id="mobileNav">
+        <ul class="mobile-nav-links">
+            <li><a href="#beranda" onclick="closeMobileNav()">Beranda</a></li>
+            <li><a href="#tentang" onclick="closeMobileNav()">Tentang</a></li>
+            <li><a href="#destinasi" onclick="closeMobileNav()">Destinasi</a></li>
+            <li><a href="#galeri" onclick="closeMobileNav()">Galeri</a></li>
+            <li><a href="#fasilitas" onclick="closeMobileNav()">Fasilitas</a></li>
+            <li><a href="#kontak" onclick="closeMobileNav()">Kontak</a></li>
+        </ul>
+    </div>
 
-<main class="dashboard">
-<aside class="sidebar">
-  <?php if (!empty($searchedUsers)): ?>
-    <div class="search-results-users" style="margin-bottom: 20px;">
-      <h4>Hasil Pengguna (<?= count($searchedUsers) ?>)</h4>
-      <ul>
-      <?php foreach ($searchedUsers as $sUser): ?>
-        <li style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 5px;">
-          <img src="<?= esc($sUser['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-mini">
-          <a href="profile.php?id=<?= $sUser['id'] ?>"><strong><?= esc($sUser['name']) ?></strong></a>
-        </li>
-      <?php endforeach; ?>
-      </ul>
-    </div>
-  <?php elseif (!empty($searchTerm)): ?>
-    <div style="margin-bottom: 20px; padding: 10px; border: 1px solid #FFD700; border-radius: 8px;">
-        <p>Tidak ada pengguna yang cocok dengan "<?= esc($searchTerm) ?>"</p>
-    </div>
-  <?php endif; ?>
-  <?php if ($user): ?>
-    <div class="user-card">
-      <img src="<?= esc($user['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-big">
-      <h3><?= esc($user['name']) ?></h3>
-    </div>
-    <ul>
-      <li><a href="profile.php">Edit Profil</a></li>
-      <li><a href="friends.php">Teman</a></li>
-      <li><a href="settings.php">Pengaturan</a></li>
-      <li>
-        <a href="request_deletion.php" 
-           onclick="return confirm('ANDA YAKIN INGIN MEMINTA PENGHAPUSAN AKUN? Semua data, postingan, dan komentar Anda akan dihapus permanen. Aksi ini tidak dapat dibatalkan.');"
-           style="color: red; font-weight: bold;">
-           🗑️ Hapus Akun & Data
-        </a>
-      </li>
-    </ul>
-  <?php else: ?>
-    <div class="guest-card">
-      <h3>Selamat Datang di PDlimau</h3>
-      <p>Gabung sekarang untuk berinteraksi dan membuat postingan.</p>
-      <a href="register.php" class="btn-primary">Daftar Gratis</a>
-    </div>
-  <?php endif; ?>
-</aside>
-
-<section class="feed-area">
-<?php if ($user): ?>
-<form action="post.php" method="post" enctype="multipart/form-data" class="create-post">
-  <textarea name="content" placeholder="Apa yang Anda pikirkan hari ini?" required></textarea>
-  <div class="controls">
-    <input type="file" name="media">
-    <button type="submit">Kirim</button>
-  </div>
-</form>
-<?php endif; ?>
-
-<div class="feed">
-<?php if (!empty($searchTerm)): ?>
-    <h3 style="margin-bottom: 20px;">Hasil Postingan untuk "<?= esc($searchTerm) ?>" (<?= count($posts) ?>)</h3>
-    <?php if (empty($posts)): ?>
-        <div style="padding: 15px; background: rgba(0, 0, 0, 0.1); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
-            Tidak ada postingan yang ditemukan.
+    <!-- HERO -->
+    <section class="hero" id="beranda">
+        <div class="hero-content">
+            <div class="hero-badge">✦ Destinasi Wisata Terbaik ✦</div>
+            <h1>Padang Limau<br><span class="highlight">Negeri Indah</span></h1>
+            <p>Jelajahi keindahan alam yang memukau di jantung Sumatera. Nikmati pesona hutan tropis, air terjun memukau, dan kearifan lokal yang tak terlupakan.</p>
+            <div class="hero-buttons">
+                <a href="#destinasi" class="btn btn-primary">
+                    <i class="fas fa-compass"></i> Jelajahi Sekarang
+                </a>
+                <a href="#tentang" class="btn btn-outline">
+                    <i class="fas fa-play-circle"></i> Pelajari Lebih
+                </a>
+            </div>
         </div>
-    <?php endif; ?>
-<?php endif; ?>
-<?php foreach ($posts as $p): ?>
-<?php
-$likeCount = $pdo->prepare('SELECT COUNT(*) FROM likes WHERE post_id=?');
-$likeCount->execute([$p['id']]);
-$totalLikes = $likeCount->fetchColumn();
+    </section>
 
-$liked = false;
-if ($user) {
-  $likedStmt = $pdo->prepare('SELECT 1 FROM likes WHERE user_id=? AND post_id=?');
-  $likedStmt->execute([$user['id'], $p['id']]);
-  $liked = $likedStmt->fetch();
-}
+    <!-- ABOUT -->
+    <section class="about" id="tentang">
+        <div class="section-container">
+            <div class="about-grid">
+                <div class="about-image fade-in">
+                    <img src="https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=800" alt="Padang Limau Negeri Indah">
+                    <div class="floating-card">
+                        <div class="number">50+</div>
+                        <div class="text">Tahun Sejarah</div>
+                    </div>
+                </div>
+                <div class="about-content fade-in">
+                    <div class="label" style="display:inline-block; background:rgba(26,94,26,0.1); color:#1a5e1a; padding:6px 20px; border-radius:50px; font-size:0.8rem; font-weight:600; letter-spacing:2px; text-transform:uppercase; margin-bottom:15px;">Tentang Kami</div>
+                    <h3>Surga Tersembunyi di Sumatera yang Memukau</h3>
+                    <p>Padang Limau Negeri Indah adalah destinasi wisata alam yang menawarkan keindahan luar biasa. Terletak di kawasan yang asri, tempat ini menyajikan panorama hijau yang menyejukkan mata dan udara segar yang menyegarkan jiwa.</p>
+                    <p>Dengan keanekaragaman hayati yang kaya dan budaya lokal yang masih terjaga, Padang Limau menjadi pilihan sempurna bagi pecinta alam dan petualangan.</p>
+                    <div class="about-features">
+                        <div class="about-feature">
+                            <i class="fas fa-tree"></i>
+                            <span>Hutan Tropis</span>
+                        </div>
+                        <div class="about-feature">
+                            <i class="fas fa-water"></i>
+                            <span>Air Terjun</span>
+                        </div>
+                        <div class="about-feature">
+                            <i class="fas fa-mountain"></i>
+                            <span>Bukit & Lembah</span>
+                        </div>
+                        <div class="about-feature">
+                            <i class="fas fa-campground"></i>
+                            <span>Area Camping</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-// =========================
-// LOGIKA IDENTITAS POST
-// =========================
+    <!-- DESTINATIONS -->
+    <section class="destinations" id="destinasi">
+        <div class="section-container">
+            <div class="section-header fade-in">
+                <div class="label">Destinasi Wisata</div>
+                <h2>Tempat Wisata Populer</h2>
+                <p>Temukan berbagai destinasi menarik yang siap memanjakan mata dan hati Anda</p>
+            </div>
+            <div class="destinations-grid">
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1432405972618-c6b0cfba8673?w=600" alt="Air Terjun Kembar">
+                        <span class="badge">Populer</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Air Terjun Kembar</h3>
+                        <p>Air terjun kembar yang menakjubkan dengan ketinggian 80 meter, dikelilingi pepohonan rindang dan kolam alami yang jernih.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona A
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.9
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-// Post admin = user_id = 0
-$is_admin_post = ($p['user_id'] == 0);
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=600" alt="Danau Biru">
+                        <span class="badge">Wajib Kunjung</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Danau Biru</h3>
+                        <p>Danau alami dengan air berwarna biru kehijauan yang mempesona. Spot sempurna untuk fotografi dan relaksasi.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona B
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.8
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-$post_name = $is_admin_post
-    ? 'Admin'
-    : esc($p['name']);
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600" alt="Hutan Pinus">
+                        <span class="badge">Trending</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Hutan Pinus</h3>
+                        <p>Hutan pinus yang asri dengan jalur tracking yang menantang. Nikmati udara segar dan kicauan burung di pagi hari.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona C
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.7
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-$post_avatar = $is_admin_post
-    ? '/assets/admin-icon.png'  // Avatar Admin
-    : esc($p['avatar'] ?: 'uploads/default-avatar.png');
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=600" alt="Pantai Limau">
+                        <span class="badge">Baru</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Pantai Limau</h3>
+                        <p>Pantai berpasir putih dengan pemandangan sunset yang spektakuler. Cocok untuk bersantai bersama keluarga.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona D
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.6
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-$author_id = $p['user_id'];
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1519681393784-d120267933ba?w=600" alt="Bukit Panorama">
+                        <span class="badge">Favorit</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Bukit Panorama</h3>
+                        <p>Titik tertinggi dengan pemandangan 360 derajat yang memukau. Spot terbaik untuk menikmati sunrise dan sunset.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona E
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.9
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-// =========================
-// HAPUS SEMUA LOGIKA IKLAN ADMIN
-// =========================
-// (Tidak ada $has_admin_ad)
-// (Tidak ada admin_ad_content)
-// (Tidak ada penyisipan ad dari database)
+                <div class="dest-card fade-in">
+                    <div class="dest-card-image">
+                        <img src="https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?w=600" alt="Kampung Budaya">
+                        <span class="badge">Budaya</span>
+                    </div>
+                    <div class="dest-card-body">
+                        <h3>Kampung Budaya</h3>
+                        <p>Kenali kearifan lokal dan tradisi masyarakat setempat. Nikmati kuliner khas dan pertunjukan seni tradisional.</p>
+                        <div class="dest-card-footer">
+                            <div class="location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                Zona F
+                            </div>
+                            <div class="rating">
+                                <i class="fas fa-star"></i> 4.5
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-// =========================
-// CEK PERTEMANAN (kecuali admin)
-// =========================
-$isFriend = false;
+    <!-- GALLERY -->
+    <section class="gallery" id="galeri">
+        <div class="section-container">
+            <div class="section-header fade-in">
+                <div class="label">Galeri Foto</div>
+                <h2>Momen Keindahan</h2>
+                <p>Kumpulan foto-foto memukau dari berbagai sudut Padang Limau Negeri Indah</p>
+            </div>
+            <div class="gallery-grid fade-in">
+                <div class="gallery-item">
+                    <img src="https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=800" alt="Gallery 1">
+                </div>
+                <div class="gallery-item">
+                    <img src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=600" alt="Gallery 2">
+                </div>
+                <div class="gallery-item">
+                    <img src="https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600" alt="Gallery 3">
+                </div>
+                <div class="gallery-item">
+                    <img src="https://images.unsplash.com/photo-1470252649378-9c29740c9fa8?w=800" alt="Gallery 4">
+                </div>
+                <div class="gallery-item">
+                    <img src="https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?w=600" alt="Gallery 5">
+                </div>
+            </div>
+        </div>
+    </section>
 
-if ($user && $user['id'] != $author_id && !$is_admin_post) {
+    <!-- FACILITIES -->
+    <section class="facilities" id="fasilitas">
+        <div class="section-container">
+            <div class="section-header fade-in">
+                <div class="label">Fasilitas</div>
+                <h2>Fasilitas Lengkap</h2>
+                <p>Kami menyediakan berbagai fasilitas untuk kenyamanan pengunjung</p>
+            </div>
+            <div class="facilities-grid">
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-parking"></i></div>
+                    <h4>Area Parkir Luas</h4>
+                    <p>Area parkir yang aman dan luas untuk kendaraan roda dua maupun roda empat</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-utensils"></i></div>
+                    <h4>Warung & Restoran</h4>
+                    <p>Nikmati kuliner khas lokal dengan harga terjangkau di area wisata</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-restroom"></i></div>
+                    <h4>Toilet Bersih</h4>
+                    <p>Fasilitas toilet yang bersih dan terawat di setiap titik wisata</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-wifi"></i></div>
+                    <h4>WiFi Gratis</h4>
+                    <p>Koneksi internet gratis di area utama untuk berbagi momen Anda</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-campground"></i></div>
+                    <h4>Area Camping</h4>
+                    <p>Spot camping yang aman dan nyaman dengan pemandangan alam menakjubkan</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-first-aid"></i></div>
+                    <h4>Pos Kesehatan</h4>
+                    <p>Pos P3K dengan petugas terlatih untuk keselamatan pengunjung</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-mosque"></i></div>
+                    <h4>Mushola</h4>
+                    <p>Tempat ibadah yang bersih dan nyaman untuk semua pengunjung</p>
+                </div>
+                <div class="facility-card fade-in">
+                    <div class="icon"><i class="fas fa-shopping-bag"></i></div>
+                    <h4>Toko Oleh-oleh</h4>
+                    <p>Berbagai souvenir dan produk lokal khas Padang Limau</p>
+                </div>
+            </div>
+        </div>
+    </section>
 
-    $checkFriend = $pdo->prepare("
-        SELECT 1 FROM friends 
-        WHERE 
-            ((requester_id=? AND receiver_id=?) 
-        OR 
-            (requester_id=? AND receiver_id=?))
-        AND status='accepted'
-    ");
+    <!-- TESTIMONIALS -->
+    <section class="testimonials">
+        <div class="section-container">
+            <div class="section-header fade-in">
+                <div class="label">Testimoni</div>
+                <h2>Kata Mereka</h2>
+                <p>Pengalaman para pengunjung yang telah menikmati keindahan Padang Limau</p>
+            </div>
+            <div class="testimonials-grid">
+                <div class="testimonial-card fade-in">
+                    <div class="stars">
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                    </div>
+                    <p>"Tempat yang luar biasa! Pemandangan air terjunnya benar-benar memukau. Anak-anak sangat senang bermain di kolam alaminya."</p>
+                    <div class="testimonial-author">
+                        <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100" alt="Author">
+                        <div>
+                            <div class="name">Ahmad Rizki</div>
+                            <div class="role">Wisatawan dari Jakarta</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testimonial-card fade-in">
+                    <div class="stars">
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                    </div>
+                    <p>"Camping di sini adalah pengalaman terbaik! Udara segar, bintang yang terlihat jelas, dan suasana yang sangat damai."</p>
+                    <div class="testimonial-author">
+                        <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100" alt="Author">
+                        <div>
+                            <div class="name">Siti Nurhaliza</div>
+                            <div class="role">Travel Blogger</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testimonial-card fade-in">
+                    <div class="stars">
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star"></i>
+                        <i class="fas fa-star-half-alt"></i>
+                    </div>
+                    <p>"Fasilitasnya lengkap dan terawat. Masyarakat setempat sangat ramah. Kuliner lokalnya juga enak-enak. Pasti akan kembali lagi!"</p>
+                    <div class="testimonial-author">
+                        <img src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100" alt="Author">
+                        <div>
+                            <div class="name">Budi Santoso</div>
+                            <div class="role">Fotografer</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-    $checkFriend->execute([
-        $user['id'], $author_id,
-        $author_id, $user['id']
-    ]);
+    <!-- CTA -->
+    <section class="cta">
+        <div class="section-container">
+            <div class="cta-box fade-in">
+                <h2>Siap Menjelajahi Padang Limau?</h2>
+                <p>Rencanakan perjalanan Anda sekarang dan rasakan keindahan alam yang tak terlupakan bersama keluarga dan sahabat.</p>
+                <a href="#kontak" class="btn">
+                    <i class="fas fa-paper-plane"></i> Hubungi Kami
+                </a>
+            </div>
+        </div>
+    </section>
 
-    $isFriend = $checkFriend->fetch();
-}
-?>
-<article class="post">
-  <div class="post-header">
-    <img src="<?= $post_avatar ?>" class="avatar">
-    <div>
-      <?php if (!$is_admin_post): // Link profil hanya untuk user biasa ?>
-        <a href="profile.php?id=<?= $author_id ?>"><strong><?= $post_name ?></strong></a><br>
-      <?php else: // Untuk Admin, tampilkan nama saja ?>
-        <strong><?= $post_name ?></strong><br>
-      <?php endif; ?>
-      <small><?= esc($p['created_at']) ?></small>
+    <!-- CONTACT -->
+    <section class="contact" id="kontak">
+        <div class="section-container">
+            <div class="section-header fade-in">
+                <div class="label">Kontak</div>
+                <h2>Hubungi Kami</h2>
+                <p>Jangan ragu untuk menghubungi kami jika ada pertanyaan atau ingin melakukan reservasi</p>
+            </div>
+            <div class="contact-grid">
+                <div class="contact-info fade-in">
+                    <h3>Informasi Kontak</h3>
+                    <p>Kami siap membantu Anda merencanakan perjalanan wisata yang sempurna. Hubungi kami melalui salah satu cara berikut:</p>
+                    <div class="contact-item">
+                        <div class="icon"><i class="fas fa-map-marker-alt"></i></div>
+                        <div>
+                            <h4>Alamat</h4>
+                            <p>Padang Limau, Sumatera, Indonesia</p>
+                        </div>
+                    </div>
+                    <div class="contact-item">
+                        <div class="icon"><i class="fas fa-phone"></i></div>
+                        <div>
+                            <h4>Telepon</h4>
+                            <p>+62 812-3456-7890</p>
+                        </div>
+                    </div>
+                    <div class="contact-item">
+                        <div class="icon"><i class="fas fa-envelope"></i></div>
+                        <div>
+                            <h4>Email</h4>
+                            <p>info@padanglimau.go.id</p>
+                        </div>
+                    </div>
+                    <div class="contact-item">
+                        <div class="icon"><i class="fas fa-clock"></i></div>
+                        <div>
+                            <h4>Jam Operasional</h4>
+                            <p>Setiap Hari, 07:00 - 18:00 WIB</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="contact-form fade-in">
+                    <form id="contactForm">
+                        <div class="form-group">
+                            <label>Nama Lengkap</label>
+                            <input type="text" placeholder="Masukkan nama Anda" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Email</label>
+                            <input type="email" placeholder="Masukkan email Anda" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Subjek</label>
+                            <input type="text" placeholder="Subjek pesan" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Pesan</label>
+                            <textarea placeholder="Tulis pesan Anda..." required></textarea>
+                        </div>
+                        <button type="submit" class="btn">
+                            <i class="fas fa-paper-plane"></i> Kirim Pesan
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- MAP -->
+    <section class="map-section">
+        <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d255286.35447365995!2d100.3457!3d-0.7893!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x2e3b7643c1b5e6b7%3A0x3c8c42e3b5e8f0b0!2sSumatera+Barat!5e0!3m2!1sid!2sid!4v1699000000000!5m2!1sid!2sid" allowfullscreen="" loading="lazy"></iframe>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <h3><i class="fas fa-leaf" style="color:#f0a500; margin-right:8px;"></i>Padang Limau</h3>
+                <p>Destinasi wisata alam terbaik di Sumatera yang menawarkan keindahan alam, kearifan lokal, dan pengalaman tak terlupakan.</p>
+                <div class="social-links">
+                    <a href="#"><i class="fab fa-facebook-f"></i></a>
+                    <a href="#"><i class="fab fa-instagram"></i></a>
+                    <a href="#"><i class="fab fa-twitter"></i></a>
+                    <a href="#"><i class="fab fa-youtube"></i></a>
+                    <a href="#"><i class="fab fa-tiktok"></i></a>
+                </div>
+            </div>
+            <div>
+                <h4>Navigasi</h4>
+                <ul class="footer-links">
+                    <li><a href="#beranda">Beranda</a></li>
+                    <li><a href="#tentang">Tentang</a></li>
+                    <li><a href="#destinasi">Destinasi</a></li>
+                    <li><a href="#galeri">Galeri</a></li>
+                    <li><a href="#kontak">Kontak</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Destinasi</h4>
+                <ul class="footer-links">
+                    <li><a href="#">Air Terjun Kembar</a></li>
+                    <li><a href="#">Danau Biru</a></li>
+                    <li><a href="#">Hutan Pinus</a></li>
+                    <li><a href="#">Pantai Limau</a></li>
+                    <li><a href="#">Bukit Panorama</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Legal</h4>
+                <ul class="footer-links">
+                    <li><a href="privasi.html">Kebijakan Privasi</a></li>
+                    <li><a href="#">Syarat & Ketentuan</a></li>
+                    <li><a href="#">Panduan Pengunjung</a></li>
+                    <li><a href="#">FAQ</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2026 Padang Limau Negeri Indah. All Rights Reserved.</p>
+            <p>Made with <i class="fas fa-heart" style="color:#f0a500;"></i> in Sumatera</p>
+        </div>
+    </footer>
+
+    <!-- SCROLL TO TOP -->
+    <button class="scroll-top" id="scrollTop">
+        <i class="fas fa-arrow-up"></i>
+    </button>
+
+    <!-- INSTALL BANNER -->
+    <div class="install-banner" id="installBanner">
+        <p>📱 Install aplikasi untuk pengalaman terbaik!</p>
+        <button class="btn-install" id="btnInstall">Install</button>
+        <button class="btn-close" id="btnCloseInstall">&times;</button>
     </div>
-    <?php if ($user && $user['id'] != $author_id && !$is_admin_post): // Tombol hanya untuk user biasa ?>
-      <button class="add-friend-btn <?= $isFriend ? 'added' : '' ?>" data-friend-id="<?= $author_id ?>">
-        <?= $isFriend ? '✅ Sudah Teman' : '➕ Tambah Teman' ?>
-      </button>
-      <a href="block_user.php?id=<?= $author_id ?>" onclick="return confirm('Apakah Anda yakin ingin memblokir <?= esc($p['name']) ?>?')" class="btn btn-sm btn-danger" style="margin-left: 5px;">
-        🚫 Blokir
-      </a>
-    <?php endif; ?>
-  </div>
 
-  <div class="post-body">
-    <p><?= nl2br(esc($p['content'])) ?></p>
-    <script type="text/javascript">
-	atOptions = {
-		'key' : '1c50b6417d68848f731d176ec761db97',
-		'format' : 'iframe',
-		'height' : 50,
-		'width' : 320,
-		'params' : {}
-	};
-</script>
-<script type="text/javascript" src="//www.highperformanceformat.com/1c50b6417d68848f731d176ec761db97/invoke.js"></script>
-<?php if ($p['media']): ?>
-<?php if (strpos($p['media_type'],'video') !== false): ?>
-<!-- ======== VIDEO UTAMA TANPA IKLAN VAST ======== -->
-<div class="video-wrapper" style="position: relative; width: 100%;">
-    <video
-        id="mainVideo<?= $p['id'] ?>"
-        controls
-        playsinline
-        style="width:100%;"
-        src="<?= esc($p['media']) ?>">
-    </video>
-</div>
+    <script>
+        // NAVBAR SCROLL
+        const navbar = document.getElementById('navbar');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 50) {
+                navbar.classList.add('scrolled');
+            } else {
+                navbar.classList.remove('scrolled');
+            }
+        });
 
-<?php elseif (strpos($p['media_type'],'image') !== false): ?>
-    <img src="<?= esc($p['media']) ?>" class="media">
-<?php endif; ?>
-<?php endif; ?>
+        // HAMBURGER MENU
+        const hamburger = document.getElementById('hamburger');
+        const mobileNav = document.getElementById('mobileNav');
 
-<?php
-$urls = extractUrls($p['content']);
-foreach($urls as $u){
-    echo "<div class='link-preview'>".getEmbed($u)."</div>";
-}
-?>
-    </div>
+        hamburger.addEventListener('click', () => {
+            hamburger.classList.toggle('active');
+            mobileNav.classList.toggle('active');
+        });
 
-    <div class="post-stats" style="padding: 5px 10px; font-size: 0.9em; color: #777;">
-    👁️ Dilihat: <?= number_format($p['views_count']) ?> Kali
-  </div>
-  <div class="post-actions">
-    <?php if ($user): ?>
-      <form action="like.php" method="post" style="display:inline;">
-        <input type="hidden" name="post_id" value="<?= $p['id'] ?>">
-        <button type="submit" class="like-btn"><?= $liked ? '💖 Batal Suka' : '🤍 Suka' ?> (<?= $totalLikes ?>)</button>
-      </form>
-      <button type="button" class="comment-btn" onclick="toggleComment(<?= $p['id'] ?>)">💬 Komentar</button>
-      <button type="button" class="share-btn" onclick="sharePost(<?= $p['id'] ?>)">🔗 Bagikan</button>
+        function closeMobileNav() {
+            hamburger.classList.remove('active');
+            mobileNav.classList.remove('active');
+        }
 
-    <?php else: ?>
-      <button class="like-btn" onclick="loginPrompt()">🤍 Suka (<?= $totalLikes ?>)</button>
-      <button class="comment-btn" onclick="loginPrompt()">💬 Komentar</button>
-      <button class="share-btn" onclick="loginPrompt()">🔗 Bagikan</button>
-    <?php endif; ?>
+        // SCROLL TO TOP
+        const scrollTopBtn = document.getElementById('scrollTop');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 500) {
+                scrollTopBtn.classList.add('show');
+            } else {
+                scrollTopBtn.classList.remove('show');
+            }
+        });
 
-    <?php if ($user && $p['user_id'] == $user['id']): ?>
-      <a href="edit_post.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-warning">✏️ Edit</a>
-      <a href="delete_post.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-danger" onclick="return confirm('Hapus postingan ini?')">🗑️ Hapus</a
-      <?php else: ?>
-        <a href="report_post.php?id=<?= $p['id'] ?>" onclick="return confirm('Apakah Anda yakin ingin melaporkan postingan ini?')" class="btn btn-sm btn-info" style="background: #e74c3c; color: white;">🚨 Laporkan</a>
-      <?php endif; ?>
-  </div>
+        scrollTopBtn.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
 
-  <div id="comment-box-<?= $p['id'] ?>" class="comment-box" style="display:none;">
-    <?php if ($user): ?>
-      <form action="comment.php" method="post" class="comment-form">
-        <input type="hidden" name="post_id" value="<?= $p['id'] ?>">
-        <input type="text" name="content" placeholder="Tulis komentar..." required>
-        <button type="submit">Kirim</button>
-      </form>
-    <?php endif; ?>
+        // FADE IN ANIMATION
+        const fadeElements = document.querySelectorAll('.fade-in');
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, { threshold: 0.1 });
 
+        fadeElements.forEach(el => observer.observe(el));
 
-    <?php
-    $stmtC = $pdo->prepare('SELECT c.*, u.name, u.avatar 
-                             FROM comments c 
-                             JOIN users u ON c.user_id=u.id 
-                             WHERE post_id=? 
-                             ORDER BY c.id DESC');
-    $stmtC->execute([$p['id']]);
-    $comments = $stmtC->fetchAll();
-    foreach ($comments as $c):
-    ?>
-    <div class="comment">
-      <img src="<?= esc($c['avatar'] ?: 'uploads/default-avatar.png') ?>" class="avatar-mini">
-      <div class="comment-text">
-        <strong><?= esc($c['name']) ?>:</strong>
-        <span><?= esc($c['content']) ?></span>
-      </div>
-    </div>
-    <?php endforeach; ?>
-  </div>
-</article>
-<?php endforeach; ?>
-</div>
-</section>
-</main>
-<div class="admin-container" aria-hidden="false">
-    <?php if (!empty($_SESSION['admin'])): ?>
-        <a href="admin_dashboard.php" class="admin-btn" title="Dashboard Admin">Admin</a>
-        <a href="admin_change_password.php" class="admin-login-btn" title="Ganti Password Admin">Ganti Sandi</a>
-    <?php else: ?>
-        <a href="admin_login.php" class="admin-login-btn" title="Login Admin">Login Admin</a>
-    <?php endif; ?>
-</div>
-<footer class="footer">
-    <p><a href="privasi.html" style="color: #FFD700; text-decoration: underline; margin-right: 15px;">Kebijakan Privasi</a></p>
-  <p>© <?= date('Y') ?> PDlimau - Platform Sosial Kreatif Indonesia By Hartok Sanjaya </p>
-</footer>
-<script>
-const allVideos = document.querySelectorAll("video");
+        // CONTACT FORM
+        document.getElementById('contactForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            alert('Terima kasih! Pesan Anda telah terkirim. Kami akan segera menghubungi Anda.');
+            e.target.reset();
+        });
 
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
-    const vid = entry.target;
+        // PWA INSTALL
+        let deferredPrompt;
+        const installBanner = document.getElementById('installBanner');
+        const btnInstall = document.getElementById('btnInstall');
+        const btnCloseInstall = document.getElementById('btnCloseInstall');
 
-    if (entry.isIntersecting) {
-      allVideos.forEach(v => { if (v !== vid) v.pause(); });
-      vid.play().catch(()=>{});
-    } else {
-      vid.pause();
-    }
-  });
-}, { threshold: 0.6 });
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBanner.classList.add('show');
+        });
 
-allVideos.forEach(video => observer.observe(video));
-</script>
-<script>
-/* ============================================================
-   VARIABEL PHP → JS
-   ============================================================ */
+        btnInstall.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    console.log('User accepted the install prompt');
+                }
+                deferredPrompt = null;
+                installBanner.classList.remove('show');
+            }
+        });
 
-// Jumlah notifikasi total
-const totalNotifCount = <?= intval($notifCount ?? 0) ?>;
+        btnCloseInstall.addEventListener('click', () => {
+            installBanner.classList.remove('show');
+        });
 
-// Public Key VAPID (WAJIB)
-const VAPID_PUBLIC_KEY = "BAr0jbbmFIH5P0-lNRXqAhcOSRs84PJJ0Pq0q_tr2u9Q7PGvSw9rFyP9SZBfyE0H2FjaajmG2vb1V55VBbgbWpA";
-
-
-// ID pengguna saat ini (null bila tidak login)
-const CURRENT_USER_ID = <?= isset($user['id']) ? intval($user['id']) : 'null' ?>;
-</script>
-
-<script src="/assets/script.js"></script>
-
-<script>
-/* ============================================================
-   AKTIFKAN SUBSCRIBE PUSH OTOMATIS
-   ============================================================ */
-document.addEventListener("DOMContentLoaded", () => {
-    if (typeof subscribeUserToPush === "function") {
-        subscribeUserToPush();
-    } else {
-        console.error("❌ subscribeUserToPush() tidak ditemukan. Pastikan ada di script.js");
-    }
-});
-</script>
-
-<script>
-/* ============================================================
-   REGISTRASI SERVICE WORKER
-   ============================================================ */
-if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js")
-        .then(reg => console.log("✅ Service Worker aktif:", reg.scope))
-        .catch(err => console.error("❌ Service Worker gagal:", err));
-}
-</script>
-
-<script>
-/* ============================================================
-   FUNGSI TAMBAHAN – Kamera
-   ============================================================ */
-function openCamera() {
-    const video = document.getElementById('video');
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => video.srcObject = stream)
-            .catch(err => alert("Tidak bisa membuka kamera: " + err));
-    } else {
-        alert("Browser tidak mendukung kamera");
-    }
-}
-</script>
-<script>
-(function(zufs){
-var d = document,
-    s = d.createElement('script'),
-    l = d.scripts[d.scripts.length - 1];
-s.settings = zufs || {};
-s.src = "\/\/cooperative-reveal.com\/bhX.VhszdiGMlr0UYTW\/cn\/leGm-9DuCZqUMlhkYPFT\/Y-3JMlTRI_zCO\/Tjk\/t\/N\/j\/cqxFMLjeQdwAM\/Ad";
-s.async = true;
-s.referrerPolicy = 'no-referrer-when-downgrade';
-l.parentNode.insertBefore(s, l);
-})({})
-</script>
-<script async src="https://www.tiktok.com/embed.js"></script>
+        // SERVICE WORKER
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('SW registered'))
+                    .catch(err => console.log('SW registration failed'));
+            });
+        }
+    </script>
 </body>
 </html>
